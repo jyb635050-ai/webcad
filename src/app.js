@@ -1,4 +1,5 @@
 import { ModelClient } from "./model-client.js";
+import { ExportClient } from "./export-client.js";
 import { SketchEditor } from "./sketch-editor.js";
 import { CadViewer } from "./viewer.js";
 
@@ -19,6 +20,7 @@ const allBySelector = (selector) => [...document.querySelectorAll(selector)];
 class WebCadApp {
   constructor() {
     this.client = new ModelClient();
+    this.exporter = new ExportClient();
     this.viewer = new CadViewer(bySelector("#cad-canvas"));
     this.state = {
       params: clone(DEFAULT_PARAMS),
@@ -445,16 +447,53 @@ class WebCadApp {
     return passed;
   }
 
-  requestExport(format) {
+  async requestExport(format) {
     if (!this.state.result) {
       this.showToast("没有可导出的模型", "先创建一个实体。", true);
       return;
     }
-    this.runPrintCheck();
-    this.showToast(
-      "导出模块准备中",
-      `${format.toUpperCase()} 将在下一阶段生成真实文件。`,
-    );
+    bySelector("#loading-state").hidden = false;
+    this.setStatus(`正在生成 ${format.toUpperCase()}…`);
+    try {
+      const exported = await this.exporter.request("exportAll", {
+        tree: this.state.result.tree,
+        options: { bed: [256, 256, 256], density: 1.24 },
+      });
+      const check = exported.check;
+      bySelector("#metric-wall").textContent =
+        `${check.minimumWall.toFixed(2)} mm`;
+      bySelector("#metric-volume").textContent =
+        `${check.volume.toFixed(2)} mm³`;
+      const status = bySelector("#check-status");
+      status.textContent = check.ok ? "通过" : "需处理";
+      status.className = `check-state ${check.ok ? "pass" : "fail"}`;
+      if (!check.ok) {
+        this.showToast("导出前自检未通过", check.warnings.join("；"), true);
+        return;
+      }
+      const file = exported.files[format];
+      const mimeTypes = {
+        stl: "model/stl",
+        "3mf": "model/3mf",
+        step: "application/step",
+        obj: "model/obj",
+      };
+      const blob = new Blob([file], {
+        type: mimeTypes[format] || "application/octet-stream",
+      });
+      this.downloadBlob(blob, `gouxing-model.${format}`);
+      if (bySelector("#export-dialog").open) bySelector("#export-dialog").close();
+      this.showToast(
+        "导出成功",
+        `${format.toUpperCase()} · ${exported.fileBytes[format].toLocaleString()} 字节 · 预估 ${check.materialGrams.toFixed(1)}g PLA`,
+      );
+      this.setStatus(`${format.toUpperCase()} 导出成功`);
+    } catch (error) {
+      this.showToast("导出失败", error.message, true);
+      this.setStatus(`导出失败：${error.message}`);
+    } finally {
+      bySelector("#loading-state").hidden = true;
+    }
   }
 
   loadExample() {
