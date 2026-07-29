@@ -37,3 +37,6 @@
 - 任务 5 发布前验收：已生成空白启动、四孔板拉伸、3MF 导出成功三张 1536×1024 截图，并完成五项视觉一致性记录。
 - 响应式用例首轮把两个合法的示例入口误判为一个，实测桌面/手机均为 2 后保留检查并改为精确值；1536px 与 390px 横向溢出均为 0。
 - 发布前冻结判卷器全绿：PASS=42 FAIL=0 SKIP=0。
+- 任务 5 完成：已创建公开仓库 https://github.com/jyb635050-ai/webcad，GitHub Pages 使用 main 分支根目录。
+- 线上 https://jyb635050-ai.github.io/webcad/index.html 第 5 次轮询返回 HTTP 200、16654B；冻结判卷器指向线上后 PASS=42 FAIL=0 SKIP=0，通过数不减。
+- Git 作者身份只在当前仓库设置为 jyb635050-ai / users.noreply.github.com，未改全局配置；BLOCKED 仍为无。
