@@ -16,7 +16,7 @@ const pending = new Map();
 
 function ensureWorker() {
   if (worker) return worker;
-  worker = new Worker("../src/kernel-worker.js", { type: "module" });
+  worker = new Worker("../src/geometry-worker.js", { type: "module" });
   worker.addEventListener("message", (event) => {
     const entry = pending.get(event.data.id);
     if (!entry) return;

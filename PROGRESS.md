@@ -22,3 +22,7 @@
 - 任务 0 完成：`uv run --with playwright python tools/task0_probe.py` 输出 HTTP 200、PASS，体积 6000、面数 6、三角形 12、二进制 STL 684 字节；Playwright `channel="chrome"` 可复用本机 Chrome。
 - 任务 1 完成：判卷器自动发现浏览器/Python 用例，支持 `--url` 与 `out/` 产物通道；首次全绿为 PASS=4 FAIL=0 SKIP=0。
 - 任务 1 反向验证：临时将箱长 10 改为 11 后体积 6600、PASS=3 FAIL=1；还原后 PASS=4 FAIL=0 SKIP=0。
+- 判卷器冻结基线：提交 `351440f`；`tools/selftest.py` SHA256=`377860705892940F8F9871A2904AC279DF6F5EA008E5B64C309A49DFCCF91A33`；后续不得修改。
+- 任务 2 完成：真实 OCCT 四孔板圆角前体积 97738.053289mm³；R5 后体积减少 429.203673、面数增加 4，网格三角形 2556、裸边/非流形边/退化三角形均为 0。
+- 特征树补验通过：宽度改为 120 后体积 117738.053289；2mm 倒角减少体积 160、面数增加 4；旋转特征体积 9424.777961、裸边 0。
+- 任务 2 全绿：PASS=16 FAIL=0 SKIP=0；所有几何计算均在 `src/geometry-worker.js`。
