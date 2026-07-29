@@ -7,3 +7,4 @@
 *.json text eol=lf
 *.wasm binary
 *.png binary
+*.css text eol=lf
