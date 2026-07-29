@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>构形 WebCAD · 内核最小验证</title>
+    <style>
+      :root {
+        color: #172033;
+        background: #f7f9fc;
+        font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+      }
+
+      main {
+        width: min(560px, calc(100vw - 48px));
+        padding: 28px;
+        border: 1px solid #d9e0ea;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 16px 40px rgb(23 32 51 / 8%);
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+
+      p {
+        margin: 0 0 20px;
+        color: #667085;
+      }
+
+      #status {
+        color: #1769e0;
+        font-size: 28px;
+        font-weight: 700;
+      }
+
+      pre {
+        overflow: auto;
+        min-height: 88px;
+        padding: 16px;
+        border-radius: 4px;
+        background: #f7f9fc;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Replicad / OCCT 最小验证</h1>
+      <p>Worker 初始化 → 10×20×30 箱体 → 体积与二进制 STL</p>
+      <div id="status">加载内核中…</div>
+      <pre id="details" aria-live="polite"></pre>
+    </main>
+    <script type="module" src="./src/minimal.js"></script>
+  </body>
+</html>
