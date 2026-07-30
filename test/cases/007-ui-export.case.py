@@ -46,9 +46,36 @@ def main() -> int:
                 wait_until="domcontentloaded",
                 timeout=120_000,
             )
-            page.locator('[data-action="example"]').first.click()
             page.wait_for_function(
-                "Number(document.documentElement.dataset.triangleCount) > 100",
+                "document.documentElement.dataset.appReady === 'true'",
+                timeout=30_000,
+            )
+            datum_point = page.evaluate(
+                "window.__webcadQA.getDatumScreenPoint('XY')"
+            )
+            page.mouse.click(datum_point["x"], datum_point["y"])
+            page.wait_for_function(
+                "window.__webcadQA.getState().selection?.kind === 'datum-plane'",
+                timeout=30_000,
+            )
+            page.locator('[data-action="start-sketch"]').first.click()
+            overlay = page.locator("#sketch-overlay")
+            bounds = overlay.bounding_box()
+            if bounds is None:
+                raise RuntimeError("草图画布没有可点击区域")
+            page.mouse.move(bounds["x"] + 150, bounds["y"] + 140)
+            page.mouse.down()
+            page.mouse.move(
+                bounds["x"] + 550,
+                bounds["y"] + 340,
+                steps=12,
+            )
+            page.mouse.up()
+            page.locator('[data-action="finish-sketch"]').first.click()
+            page.locator('[data-feature="extrude"]').first.click()
+            page.locator('[data-action="confirm-extrude"]').click()
+            page.wait_for_function(
+                "Number(document.documentElement.dataset.triangleCount) > 0",
                 timeout=120_000,
             )
             with page.expect_download(timeout=180_000) as download_info:

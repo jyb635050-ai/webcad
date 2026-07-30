@@ -40,3 +40,13 @@
 - 任务 5 完成：已创建公开仓库 https://github.com/jyb635050-ai/webcad，GitHub Pages 使用 main 分支根目录。
 - 线上 https://jyb635050-ai.github.io/webcad/index.html 第 5 次轮询返回 HTTP 200、16654B；冻结判卷器指向线上后 PASS=42 FAIL=0 SKIP=0，通过数不减。
 - Git 作者身份只在当前仓库设置为 jyb635050-ai / users.noreply.github.com，未改全局配置；BLOCKED 仍为无。
+
+## 2026-07-30
+- 用户否决示例驱动逻辑，主流程重构为：选择基准面/实体面 → 草图 → 完成草图 → 拖箭头或输入数值拉伸；页面可见示例入口已降为 0。
+- 新交互概念保存为 `docs/webcad-solidworks-flow-concept.png`；原生 `view_image` 因 Windows 1327 无法读取 D 盘，改用只读内存缩略图完成同屏视觉比较。
+- Three.js 视口新增三个真实可拾取基准面、实体面射线拾取、面高亮、透明拉伸预览、法向箭头拖动与毫米值同步。
+- Worker 与导出 Worker 已支持 XY/XZ/YZ 三平面拉伸，以及在现有实体面上的 fuse 追加拉伸；所有几何仍在 Worker 内完成。
+- 用户明确批准迁移与新需求冲突的 `004/007/008` UI 用例；`tools/selftest.py`、几何/导出数值断言和容差未改。
+- 新主流程用例：空白启动、示例入口 0、真点基准面、真画草图、拖箭头 20→32、输入 32、体积 100800、再点实体顶面，PASS=11 FAIL=0。
+- 实体面追加拉伸首轮因三个基准面交叉处拾取歧义，总 Z 高度 50 而失败；将每个基准面引导点移到不重叠区域后，体积 70000.00002、总高 30.0000003、开放边 0、三角形 28，全绿 PASS=5 FAIL=0。
+- SolidWorks 式重构最终本地全量：PASS=58 FAIL=0 SKIP=0；1536px/390px 横向溢出均 0，示例入口均 0。

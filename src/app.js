@@ -3,34 +3,41 @@ import { ExportClient } from "./export-client.js";
 import { SketchEditor } from "./sketch-editor.js";
 import { CadViewer } from "./viewer.js";
 
-const STORAGE_KEY = "gouxing-webcad-project-v1";
+const STORAGE_KEY = "gouxing-webcad-project-v2";
 const DEFAULT_PARAMS = Object.freeze({
   width: 100,
   depth: 50,
   thickness: 20,
   holeDiameter: 6,
-  filletRadius: 5,
+  filletRadius: 0,
   chamferSize: 0,
 });
 
 const clone = (value) => structuredClone(value);
 const bySelector = (selector) => document.querySelector(selector);
 const allBySelector = (selector) => [...document.querySelectorAll(selector)];
+const emptyTree = () => ({ version: 2, unit: "mm", sketches: {}, features: [] });
 
 class WebCadApp {
   constructor() {
     this.client = new ModelClient();
     this.exporter = new ExportClient();
-    this.viewer = new CadViewer(bySelector("#cad-canvas"));
     this.state = {
       params: clone(DEFAULT_PARAMS),
-      mode: "empty",
-      holes: [],
+      mode: "select-plane",
+      selection: null,
+      tree: emptyTree(),
       result: null,
+      pendingProfile: null,
+      pendingExtrude: 20,
       history: [],
       future: [],
       dirty: false,
     };
+    this.viewer = new CadViewer(bySelector("#cad-canvas"), {
+      onSelection: (selection) => this.onSelection(selection),
+      onExtrudeDrag: (distance) => this.updateExtrudePreview(distance),
+    });
     this.dimensionTarget = null;
     this.recomputeTimer = 0;
     this.sketch = new SketchEditor(bySelector("#sketch-overlay"), {
@@ -39,26 +46,48 @@ class WebCadApp {
     });
     this.bindUi();
     this.syncParameterInputs();
-    this.tryRestore();
+    this.newProject(false);
     document.documentElement.dataset.appReady = "true";
-    document.documentElement.dataset.triangleCount = "0";
     window.__webcadQA = {
       sampleCanvas: (columns = 20, rows = 10) =>
         this.viewer.sampleColors(columns, rows),
+      getDatumScreenPoint: (plane = "XY") =>
+        this.viewer.getDatumScreenPoint(plane),
+      getGizmoScreenPoint: () => this.viewer.getGizmoScreenPoint(),
+      getTopFaceScreenPoint: () => {
+        const bounds = this.state.result?.bounds;
+        if (!bounds) return null;
+        return this.viewer.projectPoint([
+          (bounds.min[0] + bounds.max[0]) / 2,
+          (bounds.min[1] + bounds.max[1]) / 2,
+          bounds.max[2],
+        ]);
+      },
+      selectDatumPlane: (plane = "XY") => this.viewer.selectDatumPlane(plane),
       getState: () => ({
         mode: this.state.mode,
+        workflowStage: this.state.mode,
+        selection: clone(this.state.selection),
         params: clone(this.state.params),
+        pendingExtrude: this.state.pendingExtrude,
         triangleCount: this.state.result?.triangleCount ?? 0,
         featureCount: this.state.result?.featureMetrics?.length ?? 0,
+        volume: this.state.result?.volume ?? 0,
+        nakedEdgeCount: this.state.result?.nakedEdgeCount ?? 0,
+        bounds: clone(this.state.result?.bounds ?? null),
       }),
     };
   }
 
   bindUi() {
     allBySelector("[data-tool]").forEach((button) => {
-      button.addEventListener("click", () =>
-        this.sketch.setTool(button.dataset.tool),
-      );
+      button.addEventListener("click", () => {
+        if (this.state.mode !== "sketch") {
+          this.showToast("先进入草图", "选择一个面，然后点击“草图”。", true);
+          return;
+        }
+        this.sketch.setTool(button.dataset.tool);
+      });
     });
     allBySelector("[data-feature]").forEach((button) => {
       button.addEventListener("click", () =>
@@ -68,6 +97,11 @@ class WebCadApp {
     allBySelector("[data-action]").forEach((button) => {
       button.addEventListener("click", () =>
         this.handleAction(button.dataset.action),
+      );
+    });
+    allBySelector("[data-plane]").forEach((element) => {
+      element.addEventListener("click", () =>
+        this.viewer.selectDatumPlane(element.dataset.plane),
       );
     });
     allBySelector("[data-param]").forEach((input) => {
@@ -83,6 +117,14 @@ class WebCadApp {
       button.addEventListener("click", () =>
         this.cameraAction(button.dataset.camera),
       );
+    });
+
+    const extrudeDistance = bySelector("#extrude-distance");
+    extrudeDistance.addEventListener("input", () => {
+      this.updateExtrudePreview(Number(extrudeDistance.value));
+    });
+    extrudeDistance.addEventListener("change", () => {
+      this.updateExtrudePreview(Number(extrudeDistance.value));
     });
 
     const projectFile = bySelector("#project-file");
@@ -111,16 +153,14 @@ class WebCadApp {
 
     window.addEventListener("keydown", (event) => {
       if (event.target instanceof HTMLInputElement) return;
-      const shortcuts = {
-        l: "line",
-        r: "rectangle",
-        c: "circle",
-        d: "dimension",
-      };
-      if (shortcuts[event.key.toLowerCase()]) {
-        this.sketch.setTool(shortcuts[event.key.toLowerCase()]);
-      }
+      const shortcuts = { l: "line", r: "rectangle", c: "circle", d: "dimension" };
+      const tool = shortcuts[event.key.toLowerCase()];
+      if (tool && this.state.mode === "sketch") this.sketch.setTool(tool);
       if (event.key.toLowerCase() === "e") this.applyFeature("extrude");
+      if (event.key === "Escape") {
+        if (this.state.mode === "extrude-preview") this.cancelExtrude();
+        else if (this.state.mode === "sketch") this.cancelSketch();
+      }
       if (event.ctrlKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
         this.saveProject();
@@ -135,10 +175,15 @@ class WebCadApp {
   handleAction(action) {
     const handlers = {
       new: () => this.newProject(),
-      example: () => this.loadExample(),
       save: () => this.saveProject(),
       "project-export": () => this.exportProject(),
       "project-import": () => bySelector("#project-file").click(),
+      "select-plane": () => this.selectPlaneAction(),
+      "start-sketch": () => this.startSketch(),
+      "finish-sketch": () => this.finishSketch(),
+      "cancel-sketch": () => this.cancelSketch(),
+      "cancel-extrude": () => this.cancelExtrude(),
+      "confirm-extrude": () => this.confirmExtrude(),
       undo: () => this.undo(),
       redo: () => this.redo(),
       "open-export": () => bySelector("#export-dialog").showModal(),
@@ -157,14 +202,80 @@ class WebCadApp {
     if (action === "zoom-out") this.viewer.zoom(1.22);
   }
 
+  onSelection(selection) {
+    if (!["select-plane", "face-selected"].includes(this.state.mode)) return;
+    this.state.selection = clone(selection);
+    bySelector("#selection-type").textContent =
+      selection.kind === "face" ? "实体面" : "基准面";
+    bySelector("#selection-name").textContent = selection.label;
+    bySelector("#selection-status").textContent = `选择：${selection.label}`;
+    bySelector("#empty-state").hidden = true;
+    this.setWorkflowStage("face-selected");
+    this.setStatus(`已选择 ${selection.label}，点击“草图”`);
+    this.renderFeatureTree();
+  }
+
+  selectPlaneAction() {
+    if (this.state.mode === "extrude-preview") this.viewer.clearExtrudePreview();
+    this.sketch.setTool(null);
+    this.sketch.clear();
+    this.state.pendingProfile = null;
+    this.state.selection = null;
+    this.viewer.clearSelection();
+    this.viewer.setSelectionMode(true);
+    this.viewer.showReferencePlanes(!this.state.result);
+    bySelector("#selection-type").textContent = "未选择";
+    bySelector("#selection-name").textContent = "—";
+    bySelector("#selection-status").textContent = "选择：0";
+    this.setWorkflowStage("select-plane");
+    if (!this.state.result) bySelector("#empty-state").hidden = false;
+    this.setStatus(
+      this.state.result ? "点击实体面开始新草图" : "点击三维基准面开始",
+    );
+  }
+
+  startSketch() {
+    if (!this.state.selection) {
+      this.showToast("还没有选择面", "先点选基准面或实体面。", true);
+      return;
+    }
+    this.pushHistory();
+    this.sketch.clear();
+    this.viewer.showReferencePlanes(false);
+    this.viewer.setSelectionMode(false);
+    this.viewer.alignToPlane(this.state.selection.plane);
+    this.setWorkflowStage("sketch");
+    this.sketch.setTool("rectangle");
+    this.setStatus(`正在 ${this.state.selection.label} 上绘制草图`);
+    this.renderFeatureTree(true);
+  }
+
+  finishSketch() {
+    if (this.state.mode !== "sketch") return;
+    const rectangle = this.sketch.getRectangle();
+    if (!this.sketch.rectangleDimensions(rectangle)) {
+      this.showToast("草图未闭合", "先画一个矩形闭合轮廓。", true);
+      return;
+    }
+    this.sketch.setTool(null);
+    this.setWorkflowStage("sketch-ready");
+    this.setStatus("草图已完成，点击“拉伸”");
+    this.renderFeatureTree(true);
+  }
+
+  cancelSketch() {
+    this.sketch.setTool(null);
+    this.sketch.clear();
+    this.viewer.setSelectionMode(true);
+    this.setWorkflowStage(this.state.selection ? "face-selected" : "select-plane");
+    this.setStatus("草图已取消");
+    this.renderFeatureTree();
+  }
+
   onSketchChange(entities) {
     this.state.dirty = true;
-    const rectangleCount = entities.filter(
-      (entity) => entity.type === "rectangle",
-    ).length;
-    const circleCount = entities.filter(
-      (entity) => entity.type === "circle",
-    ).length;
+    const rectangleCount = entities.filter((entity) => entity.type === "rectangle").length;
+    const circleCount = entities.filter((entity) => entity.type === "circle").length;
     this.setStatus(`草图：${rectangleCount} 个矩形，${circleCount} 个圆`);
   }
 
@@ -178,145 +289,230 @@ class WebCadApp {
 
   applyFeature(feature) {
     const handlers = {
-      extrude: () => this.extrudeSketch(),
+      extrude: () => this.beginExtrude(),
       cut: () => this.cutSketchCircles(),
-      fillet: () => this.setFillet(),
-      chamfer: () => this.setChamfer(),
+      fillet: () => this.addEdgeFeature("fillet"),
+      chamfer: () => this.addEdgeFeature("chamfer"),
       revolve: () => this.revolveSketch(),
     };
     handlers[feature]?.();
   }
 
-  extrudeSketch() {
-    const rectangle = this.sketch.getRectangle();
-    const dimensions = this.sketch.rectangleDimensions(rectangle);
-    if (!dimensions) {
-      this.showToast("缺少闭合轮廓", "先用矩形工具画一个轮廓。", true);
-      return;
+  buildPendingProfile() {
+    const dimensions = this.sketch.rectangleDimensions();
+    if (!dimensions || !this.state.selection) return null;
+    const selection = this.state.selection;
+    let origin = [0, 0];
+    const bounds = this.state.result?.bounds;
+    if (selection.kind === "face" && bounds) {
+      if (selection.plane === "XY") {
+        origin = [
+          (bounds.min[0] + bounds.max[0] - dimensions.width) / 2,
+          (bounds.min[1] + bounds.max[1] - dimensions.depth) / 2,
+        ];
+      } else if (selection.plane === "XZ") {
+        origin = [
+          (bounds.min[0] + bounds.max[0] - dimensions.width) / 2,
+          (bounds.min[2] + bounds.max[2] - dimensions.depth) / 2,
+        ];
+      } else {
+        origin = [
+          (bounds.min[1] + bounds.max[1] - dimensions.width) / 2,
+          (bounds.min[2] + bounds.max[2] - dimensions.depth) / 2,
+        ];
+      }
     }
-    this.pushHistory();
-    this.state.params.width = Number(dimensions.width.toFixed(3));
-    this.state.params.depth = Number(dimensions.depth.toFixed(3));
-    this.state.params.filletRadius = 0;
-    this.state.params.chamferSize = 0;
-    this.state.holes = [];
-    this.state.mode = "plate";
-    this.syncParameterInputs();
-    this.sketch.setTool(null);
-    this.recomputePlate("拉伸草图");
+    return {
+      plane: selection.plane,
+      origin,
+      width: Number(dimensions.width.toFixed(3)),
+      height: Number(dimensions.depth.toFixed(3)),
+      offset: Number(selection.coordinate ?? 0),
+      direction: Number(selection.direction ?? 1),
+      normal: clone(selection.normal),
+    };
   }
 
-  cutSketchCircles() {
-    const rectangle = this.sketch.getRectangle();
-    const dimensions = this.sketch.rectangleDimensions(rectangle);
-    const circles = this.sketch.getCircles();
-    if (!dimensions || circles.length === 0) {
-      this.showToast("没有可切除的圆", "在矩形内部画一个或多个圆后再切除。", true);
+  beginExtrude() {
+    if (this.state.mode === "sketch") {
+      this.showToast("先完成草图", "点击“完成草图”后才能拉伸。", true);
       return;
     }
-    this.pushHistory();
-    this.state.holes = circles.map((circle) => [
-      (circle.center.x - dimensions.origin.x) * this.sketch.mmPerPixel,
-      (circle.center.y - dimensions.origin.y) * this.sketch.mmPerPixel,
-    ]);
-    this.state.params.holeDiameter = Number(
-      (circles[0].radius * 2 * this.sketch.mmPerPixel).toFixed(3),
+    if (this.state.mode !== "sketch-ready") {
+      this.showToast("没有可拉伸的草图", "选择面、进入草图并完成闭合轮廓。", true);
+      return;
+    }
+    const profile = this.buildPendingProfile();
+    if (!profile) {
+      this.showToast("缺少闭合轮廓", "先画一个矩形并完成草图。", true);
+      return;
+    }
+    this.state.pendingProfile = profile;
+    this.state.pendingExtrude = Number(this.state.params.thickness) || 20;
+    bySelector("#extrude-distance").value = String(this.state.pendingExtrude);
+    bySelector("#extrude-gizmo-label").textContent = `${this.state.pendingExtrude} mm`;
+    this.viewer.fitView();
+    this.viewer.showExtrudePreview(profile, this.state.pendingExtrude);
+    this.setWorkflowStage("extrude-preview");
+    this.setStatus("拖动蓝色箭头，或输入拉伸长度");
+  }
+
+  updateExtrudePreview(value) {
+    if (this.state.mode !== "extrude-preview") return;
+    const distance = Number(value);
+    if (!Number.isFinite(distance) || distance <= 0) return;
+    this.state.pendingExtrude = Math.round(distance * 10) / 10;
+    bySelector("#extrude-distance").value = String(this.state.pendingExtrude);
+    bySelector("#extrude-gizmo-label").textContent = `${this.state.pendingExtrude} mm`;
+    this.viewer.showExtrudePreview(
+      this.state.pendingProfile,
+      this.state.pendingExtrude,
     );
-    this.syncParameterInputs();
+  }
+
+  cancelExtrude() {
+    if (this.state.mode !== "extrude-preview") return;
+    this.viewer.clearExtrudePreview();
+    this.state.pendingProfile = null;
+    this.setWorkflowStage("sketch-ready");
+    this.setStatus("拉伸已取消，草图仍可继续使用");
+  }
+
+  async confirmExtrude() {
+    if (this.state.mode !== "extrude-preview" || !this.state.pendingProfile) return;
+    const profile = clone(this.state.pendingProfile);
+    const tree = clone(this.state.tree);
+    const featureNumber = tree.features.filter((feature) => feature.type === "extrude").length + 1;
+    const sketchId = `sketch-${Object.keys(tree.sketches).length + 1}`;
+    tree.sketches[sketchId] = {
+      id: sketchId,
+      type: "rectangle",
+      plane: profile.plane,
+      origin: clone(profile.origin),
+      width: profile.width,
+      height: profile.height,
+    };
+    tree.features.push({
+      id: `extrude-${featureNumber}`,
+      type: "extrude",
+      name: `拉伸${featureNumber}`,
+      sketchId,
+      plane: profile.plane,
+      distance: this.state.pendingExtrude,
+      offset: profile.offset,
+      direction: profile.direction,
+      operation: tree.features.length === 0 ? "base" : "add",
+    });
+
+    this.pushHistory();
+    this.viewer.clearExtrudePreview();
+    const result = await this.recomputeTree(tree, `拉伸${featureNumber}`);
+    if (!result) {
+      this.viewer.showExtrudePreview(profile, this.state.pendingExtrude);
+      return;
+    }
+    if (featureNumber === 1) {
+      this.state.params.width = profile.width;
+      this.state.params.depth = profile.height;
+    }
+    this.state.params.thickness = this.state.pendingExtrude;
+    this.state.pendingProfile = null;
+    this.state.selection = null;
+    this.sketch.clear();
     this.sketch.setTool(null);
-    this.recomputePlate("切除圆孔");
+    this.viewer.setSelectionMode(true);
+    this.setWorkflowStage("select-plane");
+    this.syncParameterInputs();
+    this.setStatus(`拉伸${featureNumber}完成；可继续选择实体面`);
   }
 
-  setFillet() {
-    if (!this.state.result) {
-      this.showToast("没有实体", "先拉伸草图，再添加圆角。", true);
-      return;
-    }
-    this.pushHistory();
-    this.state.params.chamferSize = 0;
-    this.state.params.filletRadius = Math.max(
-      0.5,
-      Number(this.state.params.filletRadius) || 5,
+  async cutSketchCircles() {
+    this.showToast(
+      "切除需要面上圆草图",
+      "先选择实体面并画圆；当前重构优先完成选择面与拉伸主流程。",
+      true,
     );
-    this.syncParameterInputs();
-    this.recomputePlate("添加圆角");
   }
 
-  setChamfer() {
+  async addEdgeFeature(type) {
     if (!this.state.result) {
-      this.showToast("没有实体", "先拉伸草图，再添加倒角。", true);
+      this.showToast("没有实体", `先拉伸实体，再添加${type === "fillet" ? "圆角" : "倒角"}。`, true);
       return;
     }
+    const tree = clone(this.state.tree);
+    const isFillet = type === "fillet";
+    const size = isFillet ? 5 : 2;
+    tree.features.push({
+      id: `${type}-${tree.features.length + 1}`,
+      type,
+      name: `${isFillet ? "圆角" : "倒角"}1`,
+      [isFillet ? "radius" : "size"]: size,
+      selection: "outer-vertical",
+    });
     this.pushHistory();
-    this.state.params.filletRadius = 0;
-    this.state.params.chamferSize = 2;
-    this.syncParameterInputs();
-    this.recomputePlate("添加倒角");
+    await this.recomputeTree(tree, isFillet ? "添加圆角" : "添加倒角");
   }
 
   async revolveSketch() {
-    const rectangle = this.sketch.getRectangle();
-    const dimensions = this.sketch.rectangleDimensions(rectangle);
-    if (!dimensions) {
-      this.showToast("缺少旋转轮廓", "先画矩形作为旋转截面。", true);
+    const dimensions = this.sketch.rectangleDimensions();
+    if (this.state.mode !== "sketch-ready" || !dimensions) {
+      this.showToast("没有可旋转的草图", "选择基准面、绘制矩形并完成草图。", true);
       return;
     }
-    const radialWidth = Math.min(Math.max(dimensions.width, 2), 40);
-    const height = Math.min(Math.max(dimensions.depth, 2), 100);
     const innerRadius = 10;
-    const tree = {
-      version: 1,
-      unit: "mm",
-      sketches: {
-        profile: {
-          id: "profile",
-          type: "polygon",
-          points: [
-            [innerRadius, 0],
-            [innerRadius + radialWidth, 0],
-            [innerRadius + radialWidth, height],
-            [innerRadius, height],
-          ],
-        },
-      },
-      features: [
-        {
-          id: "revolve-1",
-          type: "revolve",
-          name: "旋转1",
-          sketchId: "profile",
-          plane: "XZ",
-          axis: [0, 0, 1],
-          angle: 360,
-        },
+    const tree = emptyTree();
+    tree.sketches.profile = {
+      id: "profile",
+      type: "polygon",
+      points: [
+        [innerRadius, 0],
+        [innerRadius + dimensions.width, 0],
+        [innerRadius + dimensions.width, dimensions.depth],
+        [innerRadius, dimensions.depth],
       ],
     };
+    tree.features.push({
+      id: "revolve-1",
+      type: "revolve",
+      name: "旋转1",
+      sketchId: "profile",
+      plane: "XZ",
+      axis: [0, 0, 1],
+      angle: 360,
+    });
     this.pushHistory();
-    this.state.mode = "revolve";
-    await this.recomputeTree(tree, "旋转草图");
+    const result = await this.recomputeTree(tree, "旋转草图");
+    if (result) {
+      this.sketch.clear();
+      this.state.selection = null;
+      this.setWorkflowStage("select-plane");
+    }
   }
 
   parameterChanged(input) {
     const key = input.dataset.param;
     const value = Number(input.value);
-    if (!Number.isFinite(value)) return;
+    if (!Number.isFinite(value) || value <= 0) return;
     this.pushHistory();
     this.state.params[key] = value;
     this.state.dirty = true;
-    if (!this.state.result || this.state.mode !== "plate") return;
+    const tree = clone(this.state.tree);
+    const firstExtrude = tree.features.find((feature) => feature.type === "extrude");
+    const firstSketch = firstExtrude ? tree.sketches[firstExtrude.sketchId] : null;
+    if (!firstExtrude || !firstSketch) return;
+    if (key === "width") firstSketch.width = value;
+    if (key === "depth") firstSketch.height = value;
+    if (key === "thickness") firstExtrude.distance = value;
+    if (!["width", "depth", "thickness"].includes(key)) return;
     clearTimeout(this.recomputeTimer);
     this.recomputeTimer = window.setTimeout(
-      () => this.recomputePlate(`修改${key}`),
+      () => this.recomputeTree(tree, `修改${key}`),
       160,
     );
   }
 
   platePayload() {
-    const params = clone(this.state.params);
-    if (params.holeDiameter <= 0 || Array.isArray(this.state.holes)) {
-      params.holes = params.holeDiameter <= 0 ? [] : clone(this.state.holes);
-    }
-    return params;
+    return { ...clone(this.state.params), holes: [] };
   }
 
   async recomputePlate(reason) {
@@ -340,9 +536,7 @@ class WebCadApp {
       const result = await operation();
       this.applyResult(result);
       this.state.dirty = true;
-      this.setStatus(
-        `${reason}完成 · ${result.triangleCount.toLocaleString()} 个三角形`,
-      );
+      this.setStatus(`${reason}完成 · ${result.triangleCount.toLocaleString()} 个三角形`);
       return result;
     } catch (error) {
       this.showToast("几何重算失败", error.message, true);
@@ -355,48 +549,60 @@ class WebCadApp {
 
   applyResult(result) {
     this.state.result = result;
+    this.state.tree = clone(result.tree);
     this.viewer.setMesh(result.mesh, result.bounds);
     bySelector("#empty-state").hidden = true;
-    document.documentElement.dataset.triangleCount = String(
-      result.triangleCount,
-    );
+    bySelector("#model-parameters").hidden = false;
+    document.documentElement.dataset.triangleCount = String(result.triangleCount);
     document.documentElement.dataset.modelReady = "true";
     this.renderFeatureTree();
     this.renderMetrics();
   }
 
-  renderFeatureTree() {
-    const tree = bySelector("#feature-tree");
-    tree.replaceChildren();
-    const features = this.state.result?.featureMetrics ?? [];
-    for (const [index, feature] of features.entries()) {
+  renderFeatureTree(includePendingSketch = false) {
+    const treeElement = bySelector("#feature-tree");
+    treeElement.replaceChildren();
+    const planes = [
+      ["YZ", "前视基准面"],
+      ["XY", "上视基准面"],
+      ["XZ", "右视基准面"],
+    ];
+    for (const [plane, label] of planes) {
       const item = document.createElement("li");
-      if (index === features.length - 1) item.classList.add("active");
-      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-      const iconNames = {
-        extrude: "extrude",
-        cut: "cut",
-        fillet: "fillet",
-        chamfer: "chamfer",
-        revolve: "revolve",
-      };
-      use.setAttribute("href", `#icon-${iconNames[feature.type] || "cube"}`);
-      icon.append(use);
-      const label = document.createElement("span");
-      const names = {
-        extrude: "拉伸",
-        cut: "切除",
-        fillet: "圆角",
-        chamfer: "倒角",
-        revolve: "旋转",
-      };
-      label.textContent = `${names[feature.type] || feature.type}${index + 1}`;
-      const metric = document.createElement("span");
-      metric.className = "tree-metric";
-      metric.textContent = `${feature.faceCount}面`;
-      item.append(icon, label, metric);
-      tree.append(item);
+      item.className = "tree-plane";
+      item.dataset.plane = plane;
+      if (this.state.selection?.plane === plane && this.state.selection.kind === "datum-plane") {
+        item.classList.add("active");
+      }
+      item.innerHTML = `<svg><use href="#icon-plane"></use></svg><span>${label}</span>`;
+      item.addEventListener("click", () => this.viewer.selectDatumPlane(plane));
+      treeElement.append(item);
+    }
+
+    const metrics = new Map(
+      (this.state.result?.featureMetrics ?? []).map((metric) => [metric.id, metric]),
+    );
+    const shownSketches = new Set();
+    for (const [index, feature] of this.state.tree.features.entries()) {
+      if (feature.sketchId && !shownSketches.has(feature.sketchId)) {
+        shownSketches.add(feature.sketchId);
+        const sketchItem = document.createElement("li");
+        sketchItem.innerHTML = `<svg><use href="#icon-sketch"></use></svg><span>草图${shownSketches.size}</span>`;
+        treeElement.append(sketchItem);
+      }
+      const item = document.createElement("li");
+      if (index === this.state.tree.features.length - 1 && !includePendingSketch) item.classList.add("active");
+      const names = { extrude: "拉伸", cut: "切除", fillet: "圆角", chamfer: "倒角", revolve: "旋转" };
+      const icons = { extrude: "extrude", cut: "cut", fillet: "fillet", chamfer: "chamfer", revolve: "revolve" };
+      const metric = metrics.get(feature.id);
+      item.innerHTML = `<svg><use href="#icon-${icons[feature.type] || "cube"}"></use></svg><span>${feature.name || `${names[feature.type] || feature.type}${index + 1}`}</span><span class="tree-metric">${metric ? `${metric.faceCount}面` : ""}</span>`;
+      treeElement.append(item);
+    }
+    if (includePendingSketch) {
+      const item = document.createElement("li");
+      item.className = "active";
+      item.innerHTML = `<svg><use href="#icon-sketch"></use></svg><span>草图${shownSketches.size + 1}</span><span class="tree-metric">编辑中</span>`;
+      treeElement.append(item);
     }
   }
 
@@ -404,18 +610,14 @@ class WebCadApp {
     const result = this.state.result;
     if (!result) return;
     bySelector("#metric-open").textContent = String(result.nakedEdgeCount);
-    bySelector("#metric-nonmanifold").textContent = String(
-      result.nonManifoldEdgeCount,
-    );
-    bySelector("#metric-volume").textContent =
-      `${result.volume.toFixed(2)} mm³`;
+    bySelector("#metric-nonmanifold").textContent = String(result.nonManifoldEdgeCount);
+    bySelector("#metric-volume").textContent = `${result.volume.toFixed(2)} mm³`;
     const wall = Math.min(
       Number(this.state.params.thickness) || Infinity,
       Math.max(Number(this.state.params.filletRadius) || 0, 1.2),
     );
     bySelector("#metric-wall").textContent = `${wall.toFixed(2)} mm`;
-    const watertight =
-      result.nakedEdgeCount === 0 && result.nonManifoldEdgeCount === 0;
+    const watertight = result.nakedEdgeCount === 0 && result.nonManifoldEdgeCount === 0;
     const waterMetric = bySelector("#metric-watertight");
     waterMetric.textContent = watertight ? "通过" : "失败";
     waterMetric.className = watertight ? "pass" : "fail";
@@ -427,11 +629,8 @@ class WebCadApp {
       return false;
     }
     const result = this.state.result;
-    const size = result.bounds.max.map(
-      (value, index) => value - result.bounds.min[index],
-    );
-    const watertight =
-      result.nakedEdgeCount === 0 && result.nonManifoldEdgeCount === 0;
+    const size = result.bounds.max.map((value, index) => value - result.bounds.min[index]);
+    const watertight = result.nakedEdgeCount === 0 && result.nonManifoldEdgeCount === 0;
     const withinBed = size.every((value) => value <= 256);
     const passed = watertight && withinBed;
     const status = bySelector("#check-status");
@@ -456,14 +655,12 @@ class WebCadApp {
     this.setStatus(`正在生成 ${format.toUpperCase()}…`);
     try {
       const exported = await this.exporter.request("exportAll", {
-        tree: this.state.result.tree,
+        tree: this.state.tree,
         options: { bed: [256, 256, 256], density: 1.24 },
       });
       const check = exported.check;
-      bySelector("#metric-wall").textContent =
-        `${check.minimumWall.toFixed(2)} mm`;
-      bySelector("#metric-volume").textContent =
-        `${check.volume.toFixed(2)} mm³`;
+      bySelector("#metric-wall").textContent = `${check.minimumWall.toFixed(2)} mm`;
+      bySelector("#metric-volume").textContent = `${check.volume.toFixed(2)} mm³`;
       const status = bySelector("#check-status");
       status.textContent = check.ok ? "通过" : "需处理";
       status.className = `check-state ${check.ok ? "pass" : "fail"}`;
@@ -496,55 +693,78 @@ class WebCadApp {
     }
   }
 
-  loadExample() {
-    this.pushHistory();
+  newProject(push = true) {
+    if (push) this.pushHistory();
     this.state.params = clone(DEFAULT_PARAMS);
-    this.state.mode = "plate";
-    this.state.holes = null;
-    this.sketch.setEntities([
-      {
-        id: "example-plate",
-        type: "rectangle",
-        start: { x: 190, y: 150 },
-        end: { x: 590, y: 350 },
-      },
-      ...[
-        [230, 190],
-        [550, 190],
-        [230, 310],
-        [550, 310],
-      ].map(([x, y], index) => ({
-        id: `example-hole-${index + 1}`,
-        type: "circle",
-        center: { x, y },
-        start: { x, y },
-        end: { x: x + 12, y },
-        radius: 12,
-      })),
-    ]);
-    this.syncParameterInputs();
-    this.sketch.setTool(null);
-    this.recomputePlate("载入四孔板");
-  }
-
-  newProject() {
-    this.pushHistory();
-    this.state.params = clone(DEFAULT_PARAMS);
-    this.state.mode = "empty";
-    this.state.holes = [];
+    this.state.mode = "select-plane";
+    this.state.selection = null;
+    this.state.tree = emptyTree();
     this.state.result = null;
+    this.state.pendingProfile = null;
+    this.state.pendingExtrude = 20;
     this.state.dirty = false;
     this.sketch.clear();
     this.sketch.setTool(null);
+    this.viewer.clearExtrudePreview();
+    this.viewer.clearSelection();
     this.viewer.clearModel();
+    this.viewer.showReferencePlanes(true);
+    this.viewer.setSelectionMode(true);
     bySelector("#empty-state").hidden = false;
-    bySelector("#feature-tree").innerHTML =
-      '<li class="tree-empty">等待草图</li>';
+    bySelector("#model-parameters").hidden = true;
+    bySelector("#selection-type").textContent = "未选择";
+    bySelector("#selection-name").textContent = "—";
     document.documentElement.dataset.triangleCount = "0";
     delete document.documentElement.dataset.modelReady;
     this.syncParameterInputs();
     this.resetMetrics();
-    this.setStatus("新工程已创建");
+    this.renderFeatureTree();
+    this.setWorkflowStage("select-plane");
+    this.setStatus("新工程：请选择一个基准面");
+  }
+
+  setWorkflowStage(stage) {
+    this.state.mode = stage;
+    document.documentElement.dataset.workflowStage = stage;
+    const activeStage = stage === "face-selected" ? "select-plane" : stage;
+    const order = ["select-plane", "sketch", "sketch-ready", "extrude-preview"];
+    const activeIndex = order.indexOf(activeStage);
+    allBySelector("[data-stage]").forEach((button) => {
+      const index = order.indexOf(button.dataset.stage);
+      button.classList.toggle("active", index === activeIndex);
+      button.classList.toggle("complete", index >= 0 && index < activeIndex);
+    });
+    const canStartSketch = Boolean(this.state.selection) && ["select-plane", "face-selected"].includes(stage);
+    allBySelector('[data-action="start-sketch"]').forEach((button) => {
+      button.disabled = !canStartSketch;
+    });
+    allBySelector('[data-action="finish-sketch"]').forEach((button) => {
+      button.disabled = stage !== "sketch";
+    });
+    allBySelector('[data-feature="extrude"]').forEach((button) => {
+      button.disabled = stage !== "sketch-ready";
+    });
+    allBySelector("[data-tool]").forEach((button) => {
+      button.disabled = stage !== "sketch";
+    });
+    bySelector("#selection-inspector").hidden = !["select-plane", "face-selected"].includes(stage);
+    bySelector("#sketch-inspector").hidden = !["sketch", "sketch-ready"].includes(stage);
+    bySelector("#extrude-inspector").hidden = stage !== "extrude-preview";
+    bySelector("#extrude-gizmo-label").hidden = stage !== "extrude-preview";
+    const showModelTools =
+      Boolean(this.state.result) &&
+      ["select-plane", "face-selected"].includes(stage);
+    bySelector("#model-parameters").hidden = !showModelTools;
+    bySelector(".print-check").hidden = !showModelTools;
+    bySelector(".export-panel").hidden = !showModelTools;
+    const hints = {
+      "select-plane": this.state.result ? "选择实体面" : "选择基准面",
+      "face-selected": "点击“草图”",
+      sketch: "绘制闭合草图",
+      "sketch-ready": "点击“拉伸”",
+      "extrude-preview": "拖动箭头或输入数值",
+    };
+    bySelector("#workflow-hint").textContent = hints[stage] || "";
   }
 
   resetMetrics() {
@@ -566,19 +786,17 @@ class WebCadApp {
   projectData() {
     return {
       schema: "gouxing-webcad-project",
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
-      mode: this.state.mode,
       params: clone(this.state.params),
-      holes: clone(this.state.holes),
-      sketches: clone(this.sketch.entities),
+      tree: clone(this.state.tree),
     };
   }
 
   saveProject() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.projectData()));
     this.state.dirty = false;
-    this.showToast("工程已保存", "模型和草图已保存到当前浏览器。");
+    this.showToast("工程已保存", "特征树已保存到当前浏览器；新开页面仍从空白工程开始。 ");
   }
 
   exportProject() {
@@ -586,13 +804,13 @@ class WebCadApp {
       type: "application/json",
     });
     this.downloadBlob(blob, "gouxing-webcad-project.json");
-    this.showToast("工程 JSON 已导出", "可在另一台电脑继续编辑。");
+    this.showToast("工程 JSON 已导出", "可在另一台电脑继续编辑。 ");
   }
 
   async importProject(file) {
     try {
       const data = JSON.parse(await file.text());
-      if (data.schema !== "gouxing-webcad-project" || data.version !== 1) {
+      if (data.schema !== "gouxing-webcad-project" || ![1, 2].includes(data.version)) {
         throw new Error("不是受支持的构形 WebCAD 工程文件");
       }
       this.pushHistory();
@@ -603,35 +821,27 @@ class WebCadApp {
     }
   }
 
-  tryRestore() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return;
-    try {
-      this.restoreData(JSON.parse(saved));
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  }
-
   async restoreData(data) {
-    this.state.params = { ...clone(DEFAULT_PARAMS), ...clone(data.params) };
-    this.state.mode = data.mode ?? "empty";
-    this.state.holes = clone(data.holes ?? []);
-    this.sketch.setEntities(data.sketches ?? []);
+    this.state.params = { ...clone(DEFAULT_PARAMS), ...clone(data.params ?? {}) };
     this.syncParameterInputs();
-    if (this.state.mode === "plate") {
-      await this.recomputePlate("恢复工程");
-    } else if (this.state.mode === "empty") {
-      this.newProject();
+    if (data.tree?.features?.length) {
+      const result = await this.recomputeTree(data.tree, "恢复工程");
+      if (result) {
+        this.state.selection = null;
+        this.setWorkflowStage("select-plane");
+      }
+    } else if (data.version === 1 && data.mode === "plate") {
+      await this.recomputePlate("恢复旧版工程");
+      this.setWorkflowStage("select-plane");
+    } else {
+      this.newProject(false);
     }
   }
 
   snapshot() {
     return {
-      mode: this.state.mode,
       params: clone(this.state.params),
-      holes: clone(this.state.holes),
-      sketches: clone(this.sketch.entities),
+      tree: clone(this.state.tree),
     };
   }
 
@@ -642,13 +852,15 @@ class WebCadApp {
   }
 
   async applySnapshot(snapshot) {
-    this.state.mode = snapshot.mode;
     this.state.params = clone(snapshot.params);
-    this.state.holes = clone(snapshot.holes);
-    this.sketch.setEntities(snapshot.sketches);
     this.syncParameterInputs();
-    if (this.state.mode === "plate") await this.recomputePlate("历史重算");
-    if (this.state.mode === "empty") this.newProject();
+    if (snapshot.tree?.features?.length) {
+      await this.recomputeTree(snapshot.tree, "历史重算");
+      this.state.selection = null;
+      this.setWorkflowStage("select-plane");
+    } else {
+      this.newProject(false);
+    }
   }
 
   undo() {
@@ -681,11 +893,8 @@ class WebCadApp {
   }
 
   toggleFullscreen() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      bySelector(".app-shell").requestFullscreen();
-    }
+    if (document.fullscreenElement) document.exitFullscreen();
+    else bySelector(".app-shell").requestFullscreen();
   }
 
   setStatus(message) {

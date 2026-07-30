@@ -114,36 +114,61 @@ function makePlateTree(params = {}) {
   };
 }
 
-function makeExtrusion(sketch, distance, zStart = 0) {
+function makeExtrusion(sketch, distance, offset = 0, feature = {}) {
   assertPositive(distance, "拉伸距离");
+  const plane = feature.plane ?? sketch.plane ?? "XY";
+  const direction = Number(feature.direction ?? 1) < 0 ? -1 : 1;
+  const start = direction > 0 ? Number(offset) : Number(offset) - distance;
+
   if (sketch.type === "rectangle") {
     assertPositive(sketch.width, "矩形宽度");
     assertPositive(sketch.height, "矩形高度");
-    const [x, y] = sketch.origin ?? [0, 0];
-    return replicad.makeBox(
-      [x, y, zStart],
-      [x + sketch.width, y + sketch.height, zStart + distance],
-    );
+    const [u, v] = sketch.origin ?? [0, 0];
+    if (plane === "XY") {
+      return replicad.makeBox(
+        [u, v, start],
+        [u + sketch.width, v + sketch.height, start + distance],
+      );
+    }
+    if (plane === "XZ") {
+      return replicad.makeBox(
+        [u, start, v],
+        [u + sketch.width, start + distance, v + sketch.height],
+      );
+    }
+    if (plane === "YZ") {
+      return replicad.makeBox(
+        [start, u, v],
+        [start + distance, u + sketch.width, v + sketch.height],
+      );
+    }
+    throw new Error(`不支持的草图平面：${plane}`);
   }
+
   if (sketch.type === "circle") {
     assertPositive(sketch.radius, "圆半径");
-    const [x, y] = sketch.center ?? [0, 0];
-    return replicad.makeCylinder(
-      sketch.radius,
-      distance,
-      [x, y, zStart],
-      [0, 0, 1],
-    );
+    const [u, v] = sketch.center ?? [0, 0];
+    if (plane === "XY") {
+      return replicad.makeCylinder(sketch.radius, distance, [u, v, start], [0, 0, 1]);
+    }
+    if (plane === "XZ") {
+      return replicad.makeCylinder(sketch.radius, distance, [u, start, v], [0, 1, 0]);
+    }
+    if (plane === "YZ") {
+      return replicad.makeCylinder(sketch.radius, distance, [start, u, v], [1, 0, 0]);
+    }
+    throw new Error(`不支持的草图平面：${plane}`);
   }
+
   if (sketch.type === "polygon") {
     if (!Array.isArray(sketch.points) || sketch.points.length < 3) {
       throw new RangeError("多边形草图至少需要 3 个点");
     }
-    const builder = new replicad.Sketcher("XY", zStart).movePointerTo(
+    const builder = new replicad.Sketcher(plane, Number(offset)).movePointerTo(
       sketch.points[0],
     );
     sketch.points.slice(1).forEach((point) => builder.lineTo(point));
-    return builder.close().extrude(distance);
+    return builder.close().extrude(distance * direction);
   }
   throw new Error(`不支持的拉伸草图：${sketch.type}`);
 }
@@ -279,19 +304,23 @@ async function recomputeFeatureTree(tree) {
     if (feature.enabled === false) continue;
     const sketch = feature.sketchId ? tree.sketches?.[feature.sketchId] : null;
     if (feature.type === "extrude") {
-      shape = replaceShape(
-        shape,
-        makeExtrusion(sketch, Number(feature.distance), Number(feature.zStart ?? 0)),
+      const extrusion = makeExtrusion(
+        sketch,
+        Number(feature.distance),
+        Number(feature.offset ?? feature.zStart ?? 0),
+        feature,
       );
-      const [x, y] = sketch.origin ?? [0, 0];
-      baseBounds = {
-        min: [x, y, Number(feature.zStart ?? 0)],
-        max: [
-          x + sketch.width,
-          y + sketch.height,
-          Number(feature.zStart ?? 0) + Number(feature.distance),
-        ],
-      };
+      if (shape && feature.operation === "add") {
+        const combined = shape.fuse(extrusion);
+        dispose(extrusion);
+        shape = replaceShape(shape, combined);
+      } else {
+        shape = replaceShape(shape, extrusion);
+      }
+      const box = shape.boundingBox;
+      const [minimum, maximum] = box.bounds;
+      baseBounds = { min: [...minimum], max: [...maximum] };
+      dispose(box);
     } else if (feature.type === "revolve") {
       shape = replaceShape(shape, makeRevolution(sketch, feature));
       const box = shape.boundingBox;

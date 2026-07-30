@@ -51,7 +51,7 @@ def main() -> int:
                 '[data-action="example"]:visible'
             ).count()
             check("1536px桌面横向溢出", desktop_overflow, 0)
-            check("桌面示例入口可见数", desktop_example_buttons, 2)
+            check("桌面示例入口可见数", desktop_example_buttons, 0)
 
             page.set_viewport_size({"width": 390, "height": 844})
             page.reload(wait_until="domcontentloaded", timeout=120_000)
@@ -66,7 +66,7 @@ def main() -> int:
                 '[data-action="example"]:visible'
             ).count()
             check("390px手机横向溢出", mobile_overflow, 0)
-            check("手机示例入口可见数", mobile_example_buttons, 2)
+            check("手机示例入口可见数", mobile_example_buttons, 0)
             browser.close()
     except Exception as error:
         failed += 1

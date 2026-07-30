@@ -893,6 +893,220 @@ dialog p {
   overflow: hidden;
 }
 
+/* SolidWorks-style sequential modeling workflow */
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.app-shell {
+  grid-template-rows: 52px 84px minmax(0, 1fr) 28px;
+}
+
+.ribbon {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.workflow-steps {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.workflow-step {
+  display: inline-flex;
+  min-width: 116px;
+  height: 66px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #344054;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workflow-step svg {
+  width: 25px;
+  height: 25px;
+}
+
+.workflow-step:not(:disabled):hover,
+.workflow-step.active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.workflow-step.complete {
+  color: #247d29;
+}
+
+.workflow-arrow {
+  color: var(--faint);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.sketch-commands {
+  flex: 1 1 auto;
+  padding-block: 5px;
+}
+
+.sketch-commands .ribbon-tool {
+  height: 70px;
+}
+
+.tree-plane {
+  cursor: pointer;
+}
+
+.tree-plane:hover {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.empty-state {
+  top: 22px;
+  left: 22px;
+  width: 350px;
+  padding: 16px 18px;
+  transform: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 8px 24px rgb(23 32 51 / 8%);
+  text-align: left;
+  pointer-events: none;
+}
+
+.empty-state h1 {
+  font-size: 17px;
+}
+
+.empty-state p {
+  margin-bottom: 12px;
+}
+
+.plane-shortcuts {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.plane-shortcuts button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--blue);
+  background: #fff;
+  font-size: 11px;
+}
+
+.plane-shortcuts button:hover {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.workflow-hint {
+  position: absolute;
+  z-index: 5;
+  top: 14px;
+  left: 50%;
+  padding: 7px 12px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: #475467;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 4px 14px rgb(23 32 51 / 7%);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.gizmo-label {
+  position: absolute;
+  z-index: 7;
+  top: 39%;
+  left: 58%;
+  padding: 6px 9px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #8ca4c6;
+  border-radius: 3px;
+  color: #172033;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.gizmo-label[hidden],
+.workflow-inspector[hidden],
+#model-parameters[hidden] {
+  display: none;
+}
+
+.workflow-inspector dl {
+  margin: 4px 0 14px;
+}
+
+.workflow-inspector dl div {
+  display: flex;
+  justify-content: space-between;
+  min-height: 28px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-inspector dt,
+.workflow-inspector dd {
+  margin: 0;
+}
+
+.workflow-inspector dd {
+  color: #344054;
+  font-weight: 600;
+}
+
+.workflow-inspector p {
+  margin: 4px 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.primary-button.full {
+  width: 100%;
+}
+
+.feature-input {
+  grid-template-columns: 82px 1fr !important;
+}
+
+.inspector .dialog-actions {
+  margin-top: 4px;
+}
+
+.inspector .dialog-actions button {
+  flex: 1;
+}
+
+#extrude-inspector .primary-button {
+  background: var(--green);
+}
+
+#extrude-inspector .primary-button:hover {
+  background: #2d8d34;
+}
 @media (max-width: 1080px) {
   .app-shell {
     grid-template:

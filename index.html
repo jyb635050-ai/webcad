@@ -24,10 +24,7 @@
             <svg><use href="#icon-file"></use></svg>
             <span>新建</span>
           </button>
-          <button class="tool-button compact" data-action="example" title="载入四孔板">
-            <svg><use href="#icon-template"></use></svg>
-            <span>示例零件</span>
-          </button>
+
           <button class="tool-button compact" data-action="save" title="保存到浏览器">
             <svg><use href="#icon-save"></use></svg>
             <span>保存工程</span>
@@ -52,27 +49,37 @@
       </header>
 
       <nav class="ribbon" aria-label="建模工具栏">
-        <div class="ribbon-tabs" role="tablist">
-          <button class="ribbon-tab active" role="tab" aria-selected="true">草图</button>
-          <button class="ribbon-tab" role="tab" aria-selected="false">特征</button>
+        <div class="workflow-steps" aria-label="建模步骤">
+          <button class="workflow-step active" data-action="select-plane" data-stage="select-plane">
+            <svg><use href="#icon-cube"></use></svg><span>选择面</span>
+          </button>
+          <span class="workflow-arrow" aria-hidden="true">›</span>
+          <button class="workflow-step" data-action="start-sketch" data-stage="sketch" disabled>
+            <svg><use href="#icon-sketch"></use></svg><span>草图</span>
+          </button>
+          <span class="workflow-arrow" aria-hidden="true">›</span>
+          <button class="workflow-step" data-action="finish-sketch" data-stage="sketch-ready" disabled>
+            <svg><use href="#icon-check"></use></svg><span>完成草图</span>
+          </button>
+          <span class="workflow-arrow" aria-hidden="true">›</span>
+          <button class="workflow-step" data-feature="extrude" data-stage="extrude-preview" disabled>
+            <svg><use href="#icon-extrude"></use></svg><span>拉伸</span>
+          </button>
         </div>
-        <div class="ribbon-tools">
-          <button class="ribbon-tool" data-tool="line">
+        <div class="ribbon-tools sketch-commands" aria-label="草图与特征工具">
+          <button class="ribbon-tool" data-tool="line" disabled>
             <svg><use href="#icon-line"></use></svg><span>线</span>
           </button>
-          <button class="ribbon-tool" data-tool="rectangle">
+          <button class="ribbon-tool" data-tool="rectangle" disabled>
             <svg><use href="#icon-rectangle"></use></svg><span>矩形</span>
           </button>
-          <button class="ribbon-tool" data-tool="circle">
+          <button class="ribbon-tool" data-tool="circle" disabled>
             <svg><use href="#icon-circle"></use></svg><span>圆</span>
           </button>
-          <button class="ribbon-tool" data-tool="dimension">
+          <button class="ribbon-tool" data-tool="dimension" disabled>
             <svg><use href="#icon-dimension"></use></svg><span>尺寸</span>
           </button>
           <span class="ribbon-divider"></span>
-          <button class="ribbon-tool" data-feature="extrude">
-            <svg><use href="#icon-extrude"></use></svg><span>拉伸</span>
-          </button>
           <button class="ribbon-tool" data-feature="revolve">
             <svg><use href="#icon-revolve"></use></svg><span>旋转</span>
           </button>
@@ -96,39 +103,7 @@
       </nav>
 
       <aside class="left-panel">
-        <section class="panel-section">
-          <h2>草图工具</h2>
-          <button class="side-tool" data-tool="line">
-            <svg><use href="#icon-line"></use></svg><span>线</span><kbd>L</kbd>
-          </button>
-          <button class="side-tool" data-tool="rectangle">
-            <svg><use href="#icon-rectangle"></use></svg><span>矩形</span><kbd>R</kbd>
-          </button>
-          <button class="side-tool" data-tool="circle">
-            <svg><use href="#icon-circle"></use></svg><span>圆</span><kbd>C</kbd>
-          </button>
-          <button class="side-tool" data-tool="dimension">
-            <svg><use href="#icon-dimension"></use></svg><span>尺寸</span><kbd>D</kbd>
-          </button>
-        </section>
-        <section class="panel-section">
-          <h2>特征工具</h2>
-          <button class="side-tool" data-feature="extrude">
-            <svg><use href="#icon-extrude"></use></svg><span>拉伸</span><kbd>E</kbd>
-          </button>
-          <button class="side-tool" data-feature="revolve">
-            <svg><use href="#icon-revolve"></use></svg><span>旋转</span>
-          </button>
-          <button class="side-tool" data-feature="cut">
-            <svg><use href="#icon-cut"></use></svg><span>切除</span>
-          </button>
-          <button class="side-tool" data-feature="fillet">
-            <svg><use href="#icon-fillet"></use></svg><span>圆角</span>
-          </button>
-          <button class="side-tool" data-feature="chamfer">
-            <svg><use href="#icon-chamfer"></use></svg><span>倒角</span>
-          </button>
-        </section>
+
         <section class="feature-tree-section">
           <div class="section-heading">
             <h2>特征树</h2>
@@ -137,7 +112,9 @@
             </button>
           </div>
           <ol id="feature-tree" class="feature-tree">
-            <li class="tree-empty">等待草图</li>
+            <li class="tree-plane" data-plane="YZ"><svg><use href="#icon-plane"></use></svg><span>前视基准面</span></li>
+            <li class="tree-plane" data-plane="XY"><svg><use href="#icon-plane"></use></svg><span>上视基准面</span></li>
+            <li class="tree-plane" data-plane="XZ"><svg><use href="#icon-plane"></use></svg><span>右视基准面</span></li>
           </ol>
         </section>
         <div class="left-footer">
@@ -162,11 +139,16 @@
             aria-label="草图绘制区域"
           ></svg>
           <div id="empty-state" class="empty-state">
-            <svg><use href="#icon-sketch"></use></svg>
-            <h1>从一张草图开始</h1>
-            <p>选择“矩形”并在画布拖动，或载入四孔板示例。</p>
-            <button class="primary-button" data-action="example">载入示例零件</button>
+            <h1>选择一个面开始</h1>
+            <p>点选三维基准面，再进入草图。完成草图后拖动箭头或输入拉伸值。</p>
+            <div class="plane-shortcuts">
+              <button data-plane="YZ">前视基准面</button>
+              <button data-plane="XY">上视基准面</button>
+              <button data-plane="XZ">右视基准面</button>
+            </div>
           </div>
+          <div id="workflow-hint" class="workflow-hint">选择基准面或实体面</div>
+          <div id="extrude-gizmo-label" class="gizmo-label" hidden>20 mm</div>
           <div class="view-cube" aria-hidden="true">
             <span class="cube-top">上</span>
             <span class="cube-front">前</span>
@@ -198,8 +180,33 @@
       </main>
 
       <aside class="inspector">
-        <section class="inspector-section">
-          <h2>参数</h2>
+        <section id="selection-inspector" class="inspector-section workflow-inspector">
+          <h2>当前选择</h2>
+          <dl>
+            <div><dt>类型</dt><dd id="selection-type">未选择</dd></div>
+            <div><dt>对象</dt><dd id="selection-name">—</dd></div>
+          </dl>
+          <button class="primary-button full" data-action="start-sketch" disabled>在此面新建草图</button>
+        </section>
+        <section id="sketch-inspector" class="inspector-section workflow-inspector" hidden>
+          <h2>草图</h2>
+          <p>绘制闭合轮廓；双击尺寸可精确修改。</p>
+          <div class="dialog-actions">
+            <button class="secondary-button" data-action="cancel-sketch">取消</button>
+            <button class="primary-button" data-action="finish-sketch">完成草图</button>
+          </div>
+        </section>
+        <section id="extrude-inspector" class="inspector-section workflow-inspector" hidden>
+          <h2>拉伸</h2>
+          <label class="feature-input">拉伸长度 <span><input id="extrude-distance" type="number" min="0.1" step="1" value="20" /> mm</span></label>
+          <p>拖动视口中的蓝色箭头自由调整，或输入精确数值。</p>
+          <div class="dialog-actions">
+            <button class="primary-button" data-action="confirm-extrude">确定</button>
+            <button class="secondary-button" data-action="cancel-extrude">取消</button>
+          </div>
+        </section>
+        <section id="model-parameters" class="inspector-section" hidden>
+          <h2>特征参数</h2>
           <label>长度 <span><input data-param="width" type="number" min="1" step="1" value="100" /> mm</span></label>
           <label>宽度 <span><input data-param="depth" type="number" min="1" step="1" value="50" /> mm</span></label>
           <label>厚度 <span><input data-param="thickness" type="number" min="0.1" step="1" value="20" /> mm</span></label>
@@ -315,6 +322,8 @@
       <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
       <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z" /></symbol>
       <symbol id="icon-sketch" viewBox="0 0 24 24"><path d="M4 18 18 4l2 2L6 20H4v-2ZM13 5l6 6M8 20h12" /></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
+      <symbol id="icon-plane" viewBox="0 0 24 24"><path d="m5 7 9-4 5 4-9 4-5-4Zm0 0v10l5 4V11m9-4v10l-9 4" /></symbol>
       <symbol id="icon-orbit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M4 12c0-4 3.5-7 8-7s8 3 8 7-3.5 7-8 7-8-3-8-7Zm13-8 3 1-1 3" /></symbol>
       <symbol id="icon-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></symbol>
       <symbol id="icon-zoom-in" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6" /><path d="m15 15 5 5M7 10h6M10 7v6" /></symbol>
