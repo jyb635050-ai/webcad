@@ -1107,6 +1107,41 @@ button:disabled {
 #extrude-inspector .primary-button:hover {
   background: #2d8d34;
 }
+
+.check-input {
+  display: flex !important;
+  grid-template-columns: none !important;
+  justify-content: flex-start !important;
+  gap: 9px;
+  min-height: 34px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.check-input input {
+  width: 16px !important;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+
+#cut-inspector .danger-confirm {
+  background: #c83b35;
+}
+
+#cut-inspector .danger-confirm:hover {
+  background: #a92f2a;
+}
+
+.viewport.sketching::after {
+  position: absolute;
+  inset: 12px;
+  z-index: 3;
+  border: 1px solid rgb(23 105 224 / 16%);
+  pointer-events: none;
+  content: "";
+}
 @media (max-width: 1080px) {
   .app-shell {
     grid-template:

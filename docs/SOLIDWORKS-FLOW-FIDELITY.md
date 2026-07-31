@@ -8,6 +8,9 @@
 - `docs/screenshots/06-extrude-arrow-preview.png`
 - `docs/screenshots/07-entity-face-selected.png`
 - `docs/screenshots/08-face-extrude-preview.png`
+- `docs/screenshots/09-circle-sketch-attached.png`
+- `docs/screenshots/10-cut-depth-preview.png`
+- `docs/screenshots/11-blind-hole-result.png`
 
 ## 五项逐点对照
 
@@ -32,3 +35,13 @@
 ## 查看方式
 
 原生 `view_image` 在本机读取 D 盘时被 Windows 沙箱错误 1327 阻止；概念图和最终截图改通过只读内存缩略图通道在同一视觉上下文中检查，没有复制到项目白名单外。
+## 2026-07-31 草图贴面与切除复核
+
+1. **基准面贴合**：进入草图后隐藏会造成双平面错觉的有限旧基准面，只显示覆盖编辑视口的当前草图平面；截图 `05-sketch-on-plane.png` 中轮廓、尺寸和网格处于同一平面。
+2. **坐标与相机**：相机视线与所选面法向点积实测为 `1.0`；80×40mm 矩形的 SVG 四角与三维平面投影最大误差为 `0.0px`，草图偏置为 `0mm`。
+3. **实体面草图**：截图 `09-circle-sketch-attached.png` 中实体顶面保持为蓝色底面，圆轮廓与尺寸直接落在顶面上，不再悬浮于三维场景。
+4. **切除预览**：截图 `10-cut-depth-preview.png` 使用红色透明减料体与向内箭头；右侧仅显示切除深度、贯穿全部、确定切除和取消，沿用既定检查器密度与按钮体系。
+5. **切除结果**：截图 `11-blind-hole-result.png` 显示实体顶面真实盲孔；特征树包含切除特征，三维边线连续，没有残留预览体。
+6. **响应式与文案**：没有新增首屏入口或示例模型；新增文案只在草图/切除上下文出现，1536px 与 390px 页面横向溢出仍为 0。
+
+概念图只规定拉伸状态，未画切除状态；切除面板是满足既有功能要求的必要扩展，严格复用同一右侧检查器、毫米输入、确定/取消层级。原生 `view_image` 仍被 Windows 错误 1327 阻止，已实际调用并记录失败；随后用只读内存缩略图同屏检查概念图及最新 `05/09/10/11` 截图。

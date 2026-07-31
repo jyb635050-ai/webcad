@@ -30,13 +30,16 @@ class WebCadApp {
       result: null,
       pendingProfile: null,
       pendingExtrude: 20,
+      pendingCutProfiles: [],
+      pendingCut: 10,
+      cutThroughAll: false,
       history: [],
       future: [],
       dirty: false,
     };
     this.viewer = new CadViewer(bySelector("#cad-canvas"), {
       onSelection: (selection) => this.onSelection(selection),
-      onExtrudeDrag: (distance) => this.updateExtrudePreview(distance),
+      onExtrudeDrag: (distance) => this.updateFeaturePreview(distance),
     });
     this.dimensionTarget = null;
     this.recomputeTimer = 0;
@@ -54,12 +57,13 @@ class WebCadApp {
       getDatumScreenPoint: (plane = "XY") =>
         this.viewer.getDatumScreenPoint(plane),
       getGizmoScreenPoint: () => this.viewer.getGizmoScreenPoint(),
-      getTopFaceScreenPoint: () => {
+      getSketchAttachment: () => this.getSketchAttachment(),
+      getTopFaceScreenPoint: (u = 0.5, v = 0.5) => {
         const bounds = this.state.result?.bounds;
         if (!bounds) return null;
         return this.viewer.projectPoint([
-          (bounds.min[0] + bounds.max[0]) / 2,
-          (bounds.min[1] + bounds.max[1]) / 2,
+          bounds.min[0] + (bounds.max[0] - bounds.min[0]) * u,
+          bounds.min[1] + (bounds.max[1] - bounds.min[1]) * v,
           bounds.max[2],
         ]);
       },
@@ -70,8 +74,11 @@ class WebCadApp {
         selection: clone(this.state.selection),
         params: clone(this.state.params),
         pendingExtrude: this.state.pendingExtrude,
+        pendingCut: this.state.pendingCut,
+        cutThroughAll: this.state.cutThroughAll,
         triangleCount: this.state.result?.triangleCount ?? 0,
         featureCount: this.state.result?.featureMetrics?.length ?? 0,
+        featureTypes: this.state.tree.features.map((feature) => feature.type),
         volume: this.state.result?.volume ?? 0,
         nakedEdgeCount: this.state.result?.nakedEdgeCount ?? 0,
         bounds: clone(this.state.result?.bounds ?? null),
@@ -127,6 +134,23 @@ class WebCadApp {
       this.updateExtrudePreview(Number(extrudeDistance.value));
     });
 
+    const cutDistance = bySelector("#cut-distance");
+    cutDistance.addEventListener("input", () => {
+      this.updateCutPreview(Number(cutDistance.value));
+    });
+    cutDistance.addEventListener("change", () => {
+      this.updateCutPreview(Number(cutDistance.value));
+    });
+    const cutThroughAll = bySelector("#cut-through-all");
+    cutThroughAll.addEventListener("change", () => {
+      this.state.cutThroughAll = cutThroughAll.checked;
+      cutDistance.disabled = cutThroughAll.checked;
+      bySelector("#cut-mode-help").textContent = cutThroughAll.checked
+        ? "贯穿所选方向上的整个实体。"
+        : "红色预览指向实体内部；可拖动箭头或输入精确深度。";
+      if (this.state.mode === "cut-preview") this.renderCutPreview();
+    });
+
     const projectFile = bySelector("#project-file");
     projectFile.addEventListener("change", async () => {
       const [file] = projectFile.files;
@@ -159,6 +183,7 @@ class WebCadApp {
       if (event.key.toLowerCase() === "e") this.applyFeature("extrude");
       if (event.key === "Escape") {
         if (this.state.mode === "extrude-preview") this.cancelExtrude();
+        else if (this.state.mode === "cut-preview") this.cancelCut();
         else if (this.state.mode === "sketch") this.cancelSketch();
       }
       if (event.ctrlKey && event.key.toLowerCase() === "s") {
@@ -184,6 +209,8 @@ class WebCadApp {
       "cancel-sketch": () => this.cancelSketch(),
       "cancel-extrude": () => this.cancelExtrude(),
       "confirm-extrude": () => this.confirmExtrude(),
+      "cancel-cut": () => this.cancelCut(),
+      "confirm-cut": () => this.confirmCut(),
       undo: () => this.undo(),
       redo: () => this.redo(),
       "open-export": () => bySelector("#export-dialog").showModal(),
@@ -216,7 +243,10 @@ class WebCadApp {
   }
 
   selectPlaneAction() {
-    if (this.state.mode === "extrude-preview") this.viewer.clearExtrudePreview();
+    if (["extrude-preview", "cut-preview"].includes(this.state.mode)) {
+      this.viewer.clearExtrudePreview();
+    }
+    this.viewer.exitSketchMode({ restoreReferences: !this.state.result });
     this.sketch.setTool(null);
     this.sketch.clear();
     this.state.pendingProfile = null;
@@ -241,9 +271,8 @@ class WebCadApp {
     }
     this.pushHistory();
     this.sketch.clear();
-    this.viewer.showReferencePlanes(false);
     this.viewer.setSelectionMode(false);
-    this.viewer.alignToPlane(this.state.selection.plane);
+    this.viewer.enterSketchMode(this.state.selection);
     this.setWorkflowStage("sketch");
     this.sketch.setTool("rectangle");
     this.setStatus(`正在 ${this.state.selection.label} 上绘制草图`);
@@ -252,21 +281,30 @@ class WebCadApp {
 
   finishSketch() {
     if (this.state.mode !== "sketch") return;
-    const rectangle = this.sketch.getRectangle();
-    if (!this.sketch.rectangleDimensions(rectangle)) {
-      this.showToast("草图未闭合", "先画一个矩形闭合轮廓。", true);
+    const hasRectangle = Boolean(
+      this.sketch.rectangleDimensions(this.sketch.getRectangle()),
+    );
+    const hasCircles = this.sketch.getCircles().length > 0;
+    if (!hasRectangle && !hasCircles) {
+      this.showToast("草图未闭合", "先画一个矩形或圆形闭合轮廓。", true);
       return;
     }
     this.sketch.setTool(null);
     this.setWorkflowStage("sketch-ready");
-    this.setStatus("草图已完成，点击“拉伸”");
+    this.setStatus(
+      this.state.result
+        ? "草图已完成，可选择拉伸或切除"
+        : "草图已完成，点击“拉伸”",
+    );
     this.renderFeatureTree(true);
   }
 
   cancelSketch() {
     this.sketch.setTool(null);
     this.sketch.clear();
+    this.viewer.exitSketchMode({ restoreReferences: !this.state.result });
     this.viewer.setSelectionMode(true);
+    if (this.state.result) this.viewer.fitView();
     this.setWorkflowStage(this.state.selection ? "face-selected" : "select-plane");
     this.setStatus("草图已取消");
     this.renderFeatureTree();
@@ -290,7 +328,7 @@ class WebCadApp {
   applyFeature(feature) {
     const handlers = {
       extrude: () => this.beginExtrude(),
-      cut: () => this.cutSketchCircles(),
+      cut: () => this.beginCut(),
       fillet: () => this.addEdgeFeature("fillet"),
       chamfer: () => this.addEdgeFeature("chamfer"),
       revolve: () => this.revolveSketch(),
@@ -298,38 +336,127 @@ class WebCadApp {
     handlers[feature]?.();
   }
 
-  buildPendingProfile() {
-    const dimensions = this.sketch.rectangleDimensions();
-    if (!dimensions || !this.state.selection) return null;
-    const selection = this.state.selection;
-    let origin = [0, 0];
+  facePlaneRanges(selection = this.state.selection) {
     const bounds = this.state.result?.bounds;
-    if (selection.kind === "face" && bounds) {
-      if (selection.plane === "XY") {
-        origin = [
-          (bounds.min[0] + bounds.max[0] - dimensions.width) / 2,
-          (bounds.min[1] + bounds.max[1] - dimensions.depth) / 2,
-        ];
-      } else if (selection.plane === "XZ") {
-        origin = [
-          (bounds.min[0] + bounds.max[0] - dimensions.width) / 2,
-          (bounds.min[2] + bounds.max[2] - dimensions.depth) / 2,
-        ];
-      } else {
-        origin = [
-          (bounds.min[1] + bounds.max[1] - dimensions.width) / 2,
-          (bounds.min[2] + bounds.max[2] - dimensions.depth) / 2,
-        ];
-      }
+    if (!selection || selection.kind !== "face" || !bounds) return null;
+    if (selection.plane === "XY") {
+      return [[bounds.min[0], bounds.max[0]], [bounds.min[1], bounds.max[1]]];
     }
-    return {
+    if (selection.plane === "XZ") {
+      return [[bounds.min[0], bounds.max[0]], [bounds.min[2], bounds.max[2]]];
+    }
+    return [[bounds.min[1], bounds.max[1]], [bounds.min[2], bounds.max[2]]];
+  }
+
+  clampProfileToFace(profile, selection = this.state.selection) {
+    const ranges = this.facePlaneRanges(selection);
+    if (!ranges) return profile;
+    const next = clone(profile);
+    if (next.type === "circle") {
+      next.center[0] = Math.min(
+        ranges[0][1] - next.radius,
+        Math.max(ranges[0][0] + next.radius, next.center[0]),
+      );
+      next.center[1] = Math.min(
+        ranges[1][1] - next.radius,
+        Math.max(ranges[1][0] + next.radius, next.center[1]),
+      );
+      return next;
+    }
+    next.origin[0] = Math.min(
+      ranges[0][1] - next.width,
+      Math.max(ranges[0][0], next.origin[0]),
+    );
+    next.origin[1] = Math.min(
+      ranges[1][1] - next.height,
+      Math.max(ranges[1][0], next.origin[1]),
+    );
+    return next;
+  }
+
+  buildPendingProfile() {
+    const rectangle = this.sketch.getRectangle();
+    if (!rectangle || !this.state.selection) return null;
+    const start = this.viewer.screenPointToSketch(rectangle.start);
+    const end = this.viewer.screenPointToSketch(rectangle.end);
+    if (!start || !end) return null;
+    const width = Math.abs(end[0] - start[0]);
+    const height = Math.abs(end[1] - start[1]);
+    if (width <= 0 || height <= 0) return null;
+    const selection = this.state.selection;
+    return this.clampProfileToFace({
+      type: "rectangle",
       plane: selection.plane,
-      origin,
-      width: Number(dimensions.width.toFixed(3)),
-      height: Number(dimensions.depth.toFixed(3)),
+      origin: [
+        Number(Math.min(start[0], end[0]).toFixed(3)),
+        Number(Math.min(start[1], end[1]).toFixed(3)),
+      ],
+      width: Number(width.toFixed(3)),
+      height: Number(height.toFixed(3)),
       offset: Number(selection.coordinate ?? 0),
       direction: Number(selection.direction ?? 1),
       normal: clone(selection.normal),
+    });
+  }
+
+  buildPendingCutProfiles() {
+    const selection = this.state.selection;
+    if (!selection || selection.kind !== "face") return [];
+    const inwardNormal = selection.normal.map((value) => -Number(value));
+    const circles = this.sketch.getCircles();
+    if (circles.length) {
+      return circles.map((circle) => {
+        const center = this.viewer.screenPointToSketch(circle.center);
+        const edge = this.viewer.screenPointToSketch({
+          x: circle.center.x + circle.radius,
+          y: circle.center.y,
+        });
+        if (!center || !edge) return null;
+        const radius = Math.hypot(edge[0] - center[0], edge[1] - center[1]);
+        return this.clampProfileToFace({
+          type: "circle",
+          plane: selection.plane,
+          center: center.map((value) => Number(value.toFixed(3))),
+          radius: Number(radius.toFixed(3)),
+          offset: Number(selection.coordinate),
+          direction: -Number(selection.direction ?? 1),
+          normal: inwardNormal,
+        });
+      }).filter(Boolean);
+    }
+    const rectangle = this.buildPendingProfile();
+    if (!rectangle) return [];
+    return [{
+      ...rectangle,
+      direction: -Number(selection.direction ?? 1),
+      normal: inwardNormal,
+    }];
+  }
+
+  getSketchAttachment() {
+    const camera = this.viewer.getSketchCameraState();
+    const rectangle = this.sketch.getRectangle();
+    const profile = rectangle ? this.buildPendingProfile() : null;
+    if (!profile || !rectangle) return { ...camera, maxScreenError: null };
+    const bounds = bySelector("#sketch-overlay").getBoundingClientRect();
+    const overlayPoints = [
+      rectangle.start,
+      rectangle.end,
+      { x: rectangle.start.x, y: rectangle.end.y },
+      { x: rectangle.end.x, y: rectangle.start.y },
+    ].map((point) => ({ x: bounds.left + point.x, y: bounds.top + point.y }));
+    const projected = this.viewer.getProfileScreenPoints(profile);
+    const errors = projected.map((point) =>
+      Math.min(
+        ...overlayPoints.map((candidate) =>
+          Math.hypot(point.x - candidate.x, point.y - candidate.y),
+        ),
+      ),
+    );
+    return {
+      ...camera,
+      profile: clone(profile),
+      maxScreenError: Math.max(...errors),
     };
   }
 
@@ -351,10 +478,16 @@ class WebCadApp {
     this.state.pendingExtrude = Number(this.state.params.thickness) || 20;
     bySelector("#extrude-distance").value = String(this.state.pendingExtrude);
     bySelector("#extrude-gizmo-label").textContent = `${this.state.pendingExtrude} mm`;
+    this.viewer.exitSketchMode();
     this.viewer.fitView();
     this.viewer.showExtrudePreview(profile, this.state.pendingExtrude);
     this.setWorkflowStage("extrude-preview");
     this.setStatus("拖动蓝色箭头，或输入拉伸长度");
+  }
+
+  updateFeaturePreview(value) {
+    if (this.state.mode === "cut-preview") this.updateCutPreview(value);
+    else this.updateExtrudePreview(value);
   }
 
   updateExtrudePreview(value) {
@@ -374,8 +507,9 @@ class WebCadApp {
     if (this.state.mode !== "extrude-preview") return;
     this.viewer.clearExtrudePreview();
     this.state.pendingProfile = null;
+    this.viewer.enterSketchMode(this.state.selection);
     this.setWorkflowStage("sketch-ready");
-    this.setStatus("拉伸已取消，草图仍可继续使用");
+    this.setStatus("拉伸已取消，草图仍贴在原平面上");
   }
 
   async confirmExtrude() {
@@ -426,12 +560,137 @@ class WebCadApp {
     this.setStatus(`拉伸${featureNumber}完成；可继续选择实体面`);
   }
 
-  async cutSketchCircles() {
-    this.showToast(
-      "切除需要面上圆草图",
-      "先选择实体面并画圆；当前重构优先完成选择面与拉伸主流程。",
-      true,
+  selectedAxisSpan() {
+    const bounds = this.state.result?.bounds;
+    const plane = this.state.selection?.plane;
+    if (!bounds || !plane) return 1;
+    const axis = plane === "XY" ? 2 : plane === "XZ" ? 1 : 0;
+    return Math.abs(bounds.max[axis] - bounds.min[axis]);
+  }
+
+  cutPreviewDistance() {
+    return this.state.cutThroughAll
+      ? this.selectedAxisSpan() + 2
+      : this.state.pendingCut;
+  }
+
+  beginCut() {
+    if (this.state.mode === "sketch") {
+      this.showToast("先完成草图", "点击“完成草图”后才能切除。", true);
+      return;
+    }
+    if (
+      this.state.mode !== "sketch-ready" ||
+      !this.state.result ||
+      this.state.selection?.kind !== "face"
+    ) {
+      this.showToast("没有可切除的面上草图", "先选择实体面，绘制闭合草图并完成草图。", true);
+      return;
+    }
+    const profiles = this.buildPendingCutProfiles();
+    if (!profiles.length) {
+      this.showToast("缺少闭合轮廓", "请绘制一个矩形或至少一个圆。", true);
+      return;
+    }
+    this.state.pendingCutProfiles = profiles;
+    this.state.pendingCut = Math.min(10, Math.max(this.selectedAxisSpan() / 2, 0.1));
+    this.state.cutThroughAll = false;
+    bySelector("#cut-distance").value = String(this.state.pendingCut);
+    bySelector("#cut-distance").disabled = false;
+    bySelector("#cut-through-all").checked = false;
+    bySelector("#cut-mode-help").textContent =
+      "红色预览指向实体内部；可拖动箭头或输入精确深度。";
+    this.viewer.exitSketchMode();
+    this.viewer.fitView();
+    this.renderCutPreview();
+    this.setWorkflowStage("cut-preview");
+    this.setStatus("设置切除深度，或选择“贯穿全部”");
+  }
+
+  renderCutPreview() {
+    if (!this.state.pendingCutProfiles.length) return;
+    const distance = this.cutPreviewDistance();
+    this.viewer.showCutPreview(this.state.pendingCutProfiles, distance);
+    bySelector("#extrude-gizmo-label").textContent = this.state.cutThroughAll
+      ? "贯穿全部"
+      : `${this.state.pendingCut} mm`;
+  }
+
+  updateCutPreview(value) {
+    if (this.state.mode !== "cut-preview" || this.state.cutThroughAll) return;
+    const distance = Number(value);
+    if (!Number.isFinite(distance) || distance <= 0) return;
+    this.state.pendingCut = Math.round(distance * 10) / 10;
+    bySelector("#cut-distance").value = String(this.state.pendingCut);
+    this.renderCutPreview();
+  }
+
+  cancelCut() {
+    if (this.state.mode !== "cut-preview") return;
+    this.viewer.clearExtrudePreview();
+    this.state.pendingCutProfiles = [];
+    this.viewer.enterSketchMode(this.state.selection);
+    this.setWorkflowStage("sketch-ready");
+    this.setStatus("切除已取消，草图仍贴在原实体面上");
+  }
+
+  async confirmCut() {
+    if (
+      this.state.mode !== "cut-preview" ||
+      !this.state.pendingCutProfiles.length
+    ) return;
+    const tree = clone(this.state.tree);
+    let cutNumber = tree.features.filter((feature) => feature.type === "cut").length;
+    for (const profile of this.state.pendingCutProfiles) {
+      cutNumber += 1;
+      const sketchId = `sketch-${Object.keys(tree.sketches).length + 1}`;
+      tree.sketches[sketchId] = profile.type === "circle"
+        ? {
+            id: sketchId,
+            type: "circle",
+            plane: profile.plane,
+            center: clone(profile.center),
+            radius: profile.radius,
+          }
+        : {
+            id: sketchId,
+            type: "rectangle",
+            plane: profile.plane,
+            origin: clone(profile.origin),
+            width: profile.width,
+            height: profile.height,
+          };
+      tree.features.push({
+        id: `cut-${cutNumber}`,
+        type: "cut",
+        name: `切除${cutNumber}`,
+        sketchId,
+        plane: profile.plane,
+        distance: this.state.pendingCut,
+        throughAll: this.state.cutThroughAll,
+        offset: profile.offset,
+        direction: profile.direction,
+      });
+    }
+
+    this.pushHistory();
+    this.viewer.clearExtrudePreview();
+    const result = await this.recomputeTree(
+      tree,
+      this.state.cutThroughAll ? "贯穿切除" : `切除 ${this.state.pendingCut}mm`,
     );
+    if (!result) {
+      this.renderCutPreview();
+      return;
+    }
+    const completedCuts = this.state.pendingCutProfiles.length;
+    this.state.pendingCutProfiles = [];
+    this.state.selection = null;
+    this.sketch.clear();
+    this.sketch.setTool(null);
+    this.viewer.setSelectionMode(true);
+    this.setWorkflowStage("select-plane");
+    this.setStatus(`切除完成（${completedCuts} 个轮廓）；可继续选择实体面`);
   }
 
   async addEdgeFeature(type) {
@@ -702,9 +961,13 @@ class WebCadApp {
     this.state.result = null;
     this.state.pendingProfile = null;
     this.state.pendingExtrude = 20;
+    this.state.pendingCutProfiles = [];
+    this.state.pendingCut = 10;
+    this.state.cutThroughAll = false;
     this.state.dirty = false;
     this.sketch.clear();
     this.sketch.setTool(null);
+    this.viewer.exitSketchMode({ restoreReferences: true });
     this.viewer.clearExtrudePreview();
     this.viewer.clearSelection();
     this.viewer.clearModel();
@@ -726,7 +989,11 @@ class WebCadApp {
   setWorkflowStage(stage) {
     this.state.mode = stage;
     document.documentElement.dataset.workflowStage = stage;
-    const activeStage = stage === "face-selected" ? "select-plane" : stage;
+    const activeStage = stage === "face-selected"
+      ? "select-plane"
+      : stage === "cut-preview"
+        ? "sketch-ready"
+        : stage;
     const order = ["select-plane", "sketch", "sketch-ready", "extrude-preview"];
     const activeIndex = order.indexOf(activeStage);
     allBySelector("[data-stage]").forEach((button) => {
@@ -742,7 +1009,16 @@ class WebCadApp {
       button.disabled = stage !== "sketch";
     });
     allBySelector('[data-feature="extrude"]').forEach((button) => {
-      button.disabled = stage !== "sketch-ready";
+      button.disabled =
+        stage !== "sketch-ready" || !this.sketch.getRectangle();
+    });
+    allBySelector('[data-feature="cut"]').forEach((button) => {
+      button.disabled = !(
+        stage === "sketch-ready" &&
+        this.state.result &&
+        this.state.selection?.kind === "face" &&
+        (this.sketch.getRectangle() || this.sketch.getCircles().length)
+      );
     });
     allBySelector("[data-tool]").forEach((button) => {
       button.disabled = stage !== "sketch";
@@ -750,7 +1026,9 @@ class WebCadApp {
     bySelector("#selection-inspector").hidden = !["select-plane", "face-selected"].includes(stage);
     bySelector("#sketch-inspector").hidden = !["sketch", "sketch-ready"].includes(stage);
     bySelector("#extrude-inspector").hidden = stage !== "extrude-preview";
-    bySelector("#extrude-gizmo-label").hidden = stage !== "extrude-preview";
+    bySelector("#cut-inspector").hidden = stage !== "cut-preview";
+    bySelector("#extrude-gizmo-label").hidden =
+      !["extrude-preview", "cut-preview"].includes(stage);
     const showModelTools =
       Boolean(this.state.result) &&
       ["select-plane", "face-selected"].includes(stage);
@@ -760,9 +1038,10 @@ class WebCadApp {
     const hints = {
       "select-plane": this.state.result ? "选择实体面" : "选择基准面",
       "face-selected": "点击“草图”",
-      sketch: "绘制闭合草图",
-      "sketch-ready": "点击“拉伸”",
+      sketch: "在所选平面上绘制闭合草图",
+      "sketch-ready": this.state.result ? "选择“拉伸”或“切除”" : "点击“拉伸”",
       "extrude-preview": "拖动箭头或输入数值",
+      "cut-preview": "设置深度或贯穿全部",
     };
     bySelector("#workflow-hint").textContent = hints[stage] || "";
   }

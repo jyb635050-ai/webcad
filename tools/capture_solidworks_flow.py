@@ -108,12 +108,56 @@ def main() -> int:
             page.screenshot(
                 path=OUTPUT / "08-face-extrude-preview.png"
             )
+
+            page.locator('[data-action="cancel-extrude"]').click()
+            page.locator('[data-action="select-plane"]').click()
+            top_face = page.evaluate(
+                "window.__webcadQA.getTopFaceScreenPoint(0.25, 0.5)"
+            )
+            page.mouse.click(top_face["x"], top_face["y"])
+            page.wait_for_function(
+                "window.__webcadQA.getState().selection?.label === '实体顶面'",
+                timeout=30_000,
+            )
+            page.locator('[data-action="start-sketch"]').first.click()
+            page.locator('[data-tool="circle"]').click()
+            bounds = overlay.bounding_box()
+            if bounds is None:
+                raise RuntimeError("草图画布没有可点击区域")
+            circle_x = bounds["x"] + bounds["width"] / 2
+            circle_y = bounds["y"] + bounds["height"] / 2
+            page.mouse.move(circle_x, circle_y)
+            page.mouse.down()
+            page.mouse.move(circle_x + 40, circle_y, steps=10)
+            page.mouse.up()
+            page.screenshot(
+                path=OUTPUT / "09-circle-sketch-attached.png"
+            )
+
+            page.locator('[data-action="finish-sketch"]').first.click()
+            page.locator('[data-feature="cut"]').click()
+            page.locator("#cut-distance").fill("10")
+            page.locator("#cut-distance").dispatch_event("input")
+            page.screenshot(
+                path=OUTPUT / "10-cut-depth-preview.png"
+            )
+            page.locator('[data-action="confirm-cut"]').click()
+            page.wait_for_function(
+                "window.__webcadQA.getState().featureCount === 2",
+                timeout=120_000,
+            )
+            page.screenshot(
+                path=OUTPUT / "11-blind-hole-result.png"
+            )
             for name in [
                 "04-select-plane-start.png",
                 "05-sketch-on-plane.png",
                 "06-extrude-arrow-preview.png",
                 "07-entity-face-selected.png",
                 "08-face-extrude-preview.png",
+                "09-circle-sketch-attached.png",
+                "10-cut-depth-preview.png",
+                "11-blind-hole-result.png",
             ]:
                 print(f"SCREENSHOT {OUTPUT / name}")
             browser.close()

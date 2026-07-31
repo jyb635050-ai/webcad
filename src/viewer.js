@@ -37,11 +37,13 @@ export class CadViewer {
     this.modelGroup = new THREE.Group();
     this.referenceGroup = new THREE.Group();
     this.selectionGroup = new THREE.Group();
+    this.sketchPlaneGroup = new THREE.Group();
     this.previewGroup = new THREE.Group();
     this.scene.add(
       this.referenceGroup,
       this.modelGroup,
       this.selectionGroup,
+      this.sketchPlaneGroup,
       this.previewGroup,
     );
 
@@ -58,6 +60,8 @@ export class CadViewer {
     this.pointer = new THREE.Vector2();
     this.currentBounds = null;
     this.currentSelection = null;
+    this.sketchSelection = null;
+    this.sketchMode = false;
     this.gizmoPickMesh = null;
     this.gizmoDragStart = null;
 
@@ -172,6 +176,178 @@ export class CadViewer {
     this.referenceGroup.visible = visible;
   }
 
+  selectionPlaneCenter(selection = this.currentSelection) {
+    if (!selection) return new THREE.Vector3();
+    if (selection.kind === "face" && this.currentBounds) {
+      const center = this.currentBounds.min.map(
+        (value, index) => (value + this.currentBounds.max[index]) / 2,
+      );
+      const axis = selection.plane === "XY" ? 2 : selection.plane === "XZ" ? 1 : 0;
+      center[axis] = Number(selection.coordinate ?? center[axis]);
+      return new THREE.Vector3(...center);
+    }
+    const datum = this.referenceGroup.getObjectByName(`datum-${selection.plane}`);
+    return datum
+      ? datum.position.clone()
+      : new THREE.Vector3(...(selection.point ?? [0, 0, 0]));
+  }
+
+  clearSketchPlane() {
+    for (const child of [...this.sketchPlaneGroup.children]) {
+      disposeObject(child);
+      this.sketchPlaneGroup.remove(child);
+    }
+  }
+
+  createSketchPlaneVisual(selection) {
+    this.clearSketchPlane();
+    const width = Math.max(this.canvas.parentElement.clientWidth * 0.25, 80);
+    const height = Math.max(this.canvas.parentElement.clientHeight * 0.25, 60);
+    const surface = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({
+        color: 0x7aaef4,
+        transparent: true,
+        opacity: selection.kind === "face" ? 0.065 : 0.105,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    surface.name = "active-sketch-plane";
+
+    const vertices = [];
+    const halfWidth = width / 2;
+    const halfHeight = height / 2;
+    for (let u = -Math.floor(halfWidth / 10) * 10; u <= halfWidth; u += 10) {
+      vertices.push(u, -halfHeight, 0.015, u, halfHeight, 0.015);
+    }
+    for (let v = -Math.floor(halfHeight / 10) * 10; v <= halfHeight; v += 10) {
+      vertices.push(-halfWidth, v, 0.015, halfWidth, v, 0.015);
+    }
+    const gridGeometry = new THREE.BufferGeometry();
+    gridGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(vertices, 3),
+    );
+    const grid = new THREE.LineSegments(
+      gridGeometry,
+      new THREE.LineBasicMaterial({
+        color: BLUE,
+        transparent: true,
+        opacity: 0.16,
+        depthWrite: false,
+      }),
+    );
+    grid.name = "active-sketch-grid";
+
+    const group = new THREE.Group();
+    group.add(surface, grid);
+    if (selection.plane === "XZ") group.rotation.x = Math.PI / 2;
+    if (selection.plane === "YZ") group.rotation.y = Math.PI / 2;
+    const center = this.selectionPlaneCenter(selection);
+    const normal = new THREE.Vector3(...selection.normal).normalize();
+    group.position.copy(center).addScaledVector(normal, 0.025);
+    group.name = "active-sketch-surface";
+    this.sketchPlaneGroup.add(group);
+  }
+
+  enterSketchMode(selection = this.currentSelection) {
+    if (!selection) return;
+    this.sketchMode = true;
+    this.sketchSelection = structuredClone(selection);
+    this.canvas.parentElement.classList.add("sketching");
+    for (const plane of this.referenceGroup.children) plane.visible = false;
+    this.referenceGroup.visible = false;
+    this.selectionGroup.visible = selection.kind === "face";
+    this.createSketchPlaneVisual(selection);
+    this.alignToPlane(selection.plane);
+  }
+
+  exitSketchMode({ restoreReferences = false } = {}) {
+    this.sketchMode = false;
+    this.sketchSelection = null;
+    this.canvas.parentElement.classList.remove("sketching");
+    this.clearSketchPlane();
+    for (const plane of this.referenceGroup.children) plane.visible = true;
+    this.referenceGroup.visible = restoreReferences;
+    this.selectionGroup.visible = true;
+    this.camera.up.set(0, 0, 1);
+  }
+
+  screenPointToSketch(point, selection = this.sketchSelection ?? this.currentSelection) {
+    if (!selection) return null;
+    const bounds = this.canvas.getBoundingClientRect();
+    this.pointer.x = (Number(point.x) / bounds.width) * 2 - 1;
+    this.pointer.y = -(Number(point.y) / bounds.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const normal = new THREE.Vector3(...selection.normal).normalize();
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      normal,
+      this.selectionPlaneCenter(selection),
+    );
+    const world = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(plane, world)) return null;
+    if (selection.plane === "XY") return [world.x, world.y];
+    if (selection.plane === "XZ") return [world.x, world.z];
+    return [world.y, world.z];
+  }
+
+  sketchPointToWorld(point, profile) {
+    const [u, v] = point;
+    const offset = Number(profile.offset ?? 0);
+    if (profile.plane === "XY") return [u, v, offset];
+    if (profile.plane === "XZ") return [u, offset, v];
+    return [offset, u, v];
+  }
+
+  getProfileScreenPoints(profile) {
+    let points = [];
+    if (profile.type === "circle") {
+      const [u, v] = profile.center;
+      points = [
+        [u - profile.radius, v],
+        [u + profile.radius, v],
+        [u, v - profile.radius],
+        [u, v + profile.radius],
+      ];
+    } else {
+      const [u, v] = profile.origin;
+      points = [
+        [u, v],
+        [u + profile.width, v],
+        [u, v + profile.height],
+        [u + profile.width, v + profile.height],
+      ];
+    }
+    return points.map((point) =>
+      this.projectPoint(this.sketchPointToWorld(point, profile)),
+    );
+  }
+
+  getSketchCameraState() {
+    const selection = this.sketchSelection;
+    if (!selection) {
+      return { active: false, planeVisible: false, cameraNormalDot: 0 };
+    }
+    const viewDirection = new THREE.Vector3();
+    this.camera.getWorldDirection(viewDirection);
+    const normal = new THREE.Vector3(...selection.normal).normalize();
+    return {
+      active: this.sketchMode,
+      plane: selection.plane,
+      coordinate: Number(selection.coordinate ?? 0),
+      planeVisible:
+        this.sketchPlaneGroup.visible && this.sketchPlaneGroup.children.length > 0,
+      cameraNormalDot: Math.abs(viewDirection.dot(normal)),
+      datumVisible:
+        selection.kind !== "datum-plane" ||
+        Boolean(
+          this.sketchPlaneGroup.visible &&
+            this.sketchPlaneGroup.getObjectByName("active-sketch-plane"),
+        ),
+    };
+  }
+
   setSelectionMode(enabled) {
     this.selectionMode = Boolean(enabled);
     this.canvas.classList.toggle("selection-mode", this.selectionMode);
@@ -280,12 +456,13 @@ export class CadViewer {
     if (!hit?.face) return;
     const minimum = this.currentBounds.min;
     const maximum = this.currentBounds.max;
-    const center = minimum.map((value, index) => (value + maximum[index]) / 2);
-    const distances = hit.point.toArray().map((value, index) =>
-      Math.abs(value - center[index]),
-    );
-    const axis = distances.indexOf(Math.max(...distances));
-    const direction = hit.point.toArray()[axis] >= center[axis] ? 1 : -1;
+    const faceNormal = hit.face.normal
+      .clone()
+      .transformDirection(solid.matrixWorld)
+      .normalize();
+    const normalComponents = faceNormal.toArray().map((value) => Math.abs(value));
+    const axis = normalComponents.indexOf(Math.max(...normalComponents));
+    const direction = faceNormal.getComponent(axis) >= 0 ? 1 : -1;
     const plane = axis === 2 ? "XY" : axis === 1 ? "XZ" : "YZ";
     const labels = ["实体右侧面", "实体后侧面", "实体顶面"];
     const reverseLabels = ["实体左侧面", "实体前侧面", "实体底面"];
@@ -396,20 +573,19 @@ export class CadViewer {
   }
 
   alignToPlane(plane) {
-    if (this.currentSelection?.point) {
-      this.target.set(...this.currentSelection.point);
-    }
-    if (plane === "XY") {
-      this.yaw = -Math.PI / 2;
-      this.pitch = 1.38;
-    } else if (plane === "XZ") {
-      this.yaw = -Math.PI / 2;
-      this.pitch = 0;
-    } else {
-      this.yaw = 0;
-      this.pitch = 0;
-    }
-    this.updateCamera();
+    const selection = this.sketchSelection ?? this.currentSelection;
+    if (!selection) return;
+    const center = this.selectionPlaneCenter(selection);
+    this.target.copy(center);
+    const normal = new THREE.Vector3(...selection.normal).normalize();
+    this.camera.up.set(0, plane === "XY" ? 1 : 0, plane === "XY" ? 0 : 1);
+    const viewportHeight = Math.max(this.canvas.parentElement.clientHeight, 1);
+    const worldHeight = viewportHeight * 0.25;
+    this.distance = worldHeight /
+      (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
+    this.camera.position.copy(center).addScaledVector(normal, this.distance);
+    this.camera.lookAt(center);
+    this.camera.updateProjectionMatrix();
   }
 
   resize() {
@@ -419,6 +595,10 @@ export class CadViewer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    if (this.sketchMode && this.sketchSelection) {
+      this.createSketchPlaneVisual(this.sketchSelection);
+      this.alignToPlane(this.sketchSelection.plane);
+    }
   }
 
   clearModel() {
@@ -488,48 +668,30 @@ export class CadViewer {
     const direction = profile.direction ?? 1;
     const offset = Number(profile.offset ?? 0);
     const signedDistance = distance * direction;
+    const u = profile.type === "circle"
+      ? profile.center[0]
+      : profile.origin[0] + profile.width / 2;
+    const v = profile.type === "circle"
+      ? profile.center[1]
+      : profile.origin[1] + profile.height / 2;
     if (profile.plane === "XY") {
       return {
-        size: [profile.width, profile.height, distance],
-        center: [
-          profile.origin[0] + profile.width / 2,
-          profile.origin[1] + profile.height / 2,
-          offset + signedDistance / 2,
-        ],
-        arrowOrigin: [
-          profile.origin[0] + profile.width / 2,
-          profile.origin[1] + profile.height / 2,
-          offset,
-        ],
+        size: profile.type === "circle" ? null : [profile.width, profile.height, distance],
+        center: [u, v, offset + signedDistance / 2],
+        arrowOrigin: [u, v, offset],
       };
     }
     if (profile.plane === "XZ") {
       return {
-        size: [profile.width, distance, profile.height],
-        center: [
-          profile.origin[0] + profile.width / 2,
-          offset + signedDistance / 2,
-          profile.origin[1] + profile.height / 2,
-        ],
-        arrowOrigin: [
-          profile.origin[0] + profile.width / 2,
-          offset,
-          profile.origin[1] + profile.height / 2,
-        ],
+        size: profile.type === "circle" ? null : [profile.width, distance, profile.height],
+        center: [u, offset + signedDistance / 2, v],
+        arrowOrigin: [u, offset, v],
       };
     }
     return {
-      size: [distance, profile.width, profile.height],
-      center: [
-        offset + signedDistance / 2,
-        profile.origin[0] + profile.width / 2,
-        profile.origin[1] + profile.height / 2,
-      ],
-      arrowOrigin: [
-        offset,
-        profile.origin[0] + profile.width / 2,
-        profile.origin[1] + profile.height / 2,
-      ],
+      size: profile.type === "circle" ? null : [distance, profile.width, profile.height],
+      center: [offset + signedDistance / 2, u, v],
+      arrowOrigin: [offset, u, v],
     };
   }
 
@@ -537,6 +699,7 @@ export class CadViewer {
     this.clearExtrudePreview();
     this.previewDistance = Number(distance);
     this.previewProfile = structuredClone(profile);
+    this.previewOperation = "extrude";
     const placement = this.profilePlacement(profile, this.previewDistance);
     const geometry = new THREE.BoxGeometry(...placement.size);
     const preview = new THREE.Mesh(
@@ -589,8 +752,102 @@ export class CadViewer {
     this.gizmoPickMesh = pick;
   }
 
+  showCutPreview(profiles, distance) {
+    this.clearExtrudePreview();
+    if (!profiles?.length) return;
+    this.previewDistance = Number(distance);
+    this.previewProfile = structuredClone(profiles[0]);
+    this.previewOperation = "cut";
+    const cutColor = 0xc83b35;
+
+    for (const profile of profiles) {
+      const placement = this.profilePlacement(profile, this.previewDistance);
+      let geometry;
+      if (profile.type === "circle") {
+        geometry = new THREE.CylinderGeometry(
+          profile.radius,
+          profile.radius,
+          this.previewDistance,
+          48,
+        );
+      } else {
+        geometry = new THREE.BoxGeometry(...placement.size);
+      }
+      const preview = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({
+          color: cutColor,
+          transparent: true,
+          opacity: 0.3,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+        }),
+      );
+      if (profile.type === "circle") {
+        if (profile.plane === "XY") preview.rotation.x = Math.PI / 2;
+        if (profile.plane === "YZ") preview.rotation.z = -Math.PI / 2;
+      }
+      preview.position.set(...placement.center);
+      preview.name = "cut-preview";
+      preview.renderOrder = 8;
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry, 18),
+        new THREE.LineBasicMaterial({
+          color: 0x9f2925,
+          transparent: true,
+          opacity: 0.9,
+          depthTest: false,
+        }),
+      );
+      preview.add(edges);
+      this.previewGroup.add(preview);
+    }
+
+    const profile = profiles[0];
+    const placement = this.profilePlacement(profile, this.previewDistance);
+    const direction = new THREE.Vector3(...profile.normal).normalize();
+    const arrowLength = Math.max(this.previewDistance, 24);
+    const arrowOrigin = new THREE.Vector3(...placement.arrowOrigin);
+    const arrow = new THREE.ArrowHelper(
+      direction,
+      arrowOrigin,
+      arrowLength,
+      cutColor,
+      Math.min(8, arrowLength * 0.28),
+      Math.min(4.5, arrowLength * 0.16),
+    );
+    arrow.name = "cut-arrow";
+    arrow.renderOrder = 9;
+    arrow.traverse((child) => {
+      if (!child.material) return;
+      child.material.depthTest = false;
+      child.material.transparent = true;
+      child.renderOrder = 9;
+    });
+    this.previewGroup.add(arrow);
+
+    const pickLength = arrowLength + 12;
+    const pickGeometry = new THREE.CylinderGeometry(5, 5, pickLength, 12);
+    const pickMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.001,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const pick = new THREE.Mesh(pickGeometry, pickMaterial);
+    pick.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+    pick.position.copy(arrowOrigin).addScaledVector(direction, pickLength / 2);
+    pick.name = "cut-arrow-hit-target";
+    this.previewGroup.add(pick);
+    this.gizmoPickMesh = pick;
+  }
+
   clearExtrudePreview() {
     this.gizmoPickMesh = null;
+    this.previewOperation = null;
+    this.previewProfile = null;
+    this.previewDistance = null;
     for (const child of [...this.previewGroup.children]) {
       disposeObject(child);
       this.previewGroup.remove(child);
@@ -632,6 +889,7 @@ export class CadViewer {
   }
 
   fitView(resetAngles = true) {
+    this.camera.up.set(0, 0, 1);
     if (resetAngles) {
       this.yaw = -0.78;
       this.pitch = 0.62;

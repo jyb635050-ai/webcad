@@ -135,18 +135,39 @@ async function buildFeatureTree(tree) {
       baseBounds = { min: [...minimum], max: [...maximum] };
       dispose(box);
     } else if (feature.type === "cut") {
-      const thickness =
-        Number(feature.distance) ||
-        Math.abs(baseBounds.max[2] - baseBounds.min[2]);
-      const margin = feature.throughAll ? 1 : 0;
-      const tool = makeExtrusion(
-        sketch,
-        thickness + margin * 2,
-        baseBounds.min[2] - margin,
-      );
+      const plane = feature.plane ?? sketch?.plane ?? "XY";
+      const placedOnFace = feature.offset !== undefined;
+      let distance;
+      let offset;
+      let cutFeature = feature;
+      if (placedOnFace) {
+        const axis = plane === "XY" ? 2 : plane === "XZ" ? 1 : 0;
+        const span = Math.abs(baseBounds.max[axis] - baseBounds.min[axis]);
+        const margin = feature.throughAll ? 1 : 0;
+        distance = feature.throughAll
+          ? span + margin * 2
+          : Number(feature.distance);
+        assertPositive(distance, "切除深度");
+        const direction = Number(feature.direction ?? -1) < 0 ? -1 : 1;
+        offset = Number(feature.offset) - direction * margin;
+        cutFeature = { ...feature, plane, direction };
+      } else {
+        const thickness =
+          Number(feature.distance) ||
+          Math.abs(baseBounds.max[2] - baseBounds.min[2]);
+        const margin = feature.throughAll ? 1 : 0;
+        distance = thickness + margin * 2;
+        offset = baseBounds.min[2] - margin;
+        cutFeature = { ...feature, plane: "XY", direction: 1 };
+      }
+      const tool = makeExtrusion(sketch, distance, offset, cutFeature);
       const next = shape.cut(tool);
       dispose(tool);
       shape = replaceShape(shape, next);
+      const box = shape.boundingBox;
+      const [minimum, maximum] = box.bounds;
+      baseBounds = { min: [...minimum], max: [...maximum] };
+      dispose(box);
     } else if (feature.type === "fillet") {
       const radius = Number(feature.radius);
       const next = shape.fillet((edge) =>

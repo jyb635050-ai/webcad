@@ -83,7 +83,7 @@
           <button class="ribbon-tool" data-feature="revolve">
             <svg><use href="#icon-revolve"></use></svg><span>旋转</span>
           </button>
-          <button class="ribbon-tool" data-feature="cut">
+          <button class="ribbon-tool" data-feature="cut" disabled>
             <svg><use href="#icon-cut"></use></svg><span>切除</span>
           </button>
           <button class="ribbon-tool" data-feature="fillet">
@@ -190,7 +190,7 @@
         </section>
         <section id="sketch-inspector" class="inspector-section workflow-inspector" hidden>
           <h2>草图</h2>
-          <p>绘制闭合轮廓；双击尺寸可精确修改。</p>
+          <p>草图已贴合所选平面；绘制矩形或圆等闭合轮廓，双击尺寸可精确修改。</p>
           <div class="dialog-actions">
             <button class="secondary-button" data-action="cancel-sketch">取消</button>
             <button class="primary-button" data-action="finish-sketch">完成草图</button>
@@ -203,6 +203,19 @@
           <div class="dialog-actions">
             <button class="primary-button" data-action="confirm-extrude">确定</button>
             <button class="secondary-button" data-action="cancel-extrude">取消</button>
+          </div>
+        </section>
+        <section id="cut-inspector" class="inspector-section workflow-inspector" hidden>
+          <h2>切除</h2>
+          <label class="feature-input">切除深度 <span><input id="cut-distance" type="number" min="0.1" step="1" value="10" /> mm</span></label>
+          <label class="check-input">
+            <input id="cut-through-all" type="checkbox" />
+            <span>贯穿全部</span>
+          </label>
+          <p id="cut-mode-help">红色预览指向实体内部；可拖动箭头或输入精确深度。</p>
+          <div class="dialog-actions">
+            <button class="primary-button danger-confirm" data-action="confirm-cut">确定切除</button>
+            <button class="secondary-button" data-action="cancel-cut">取消</button>
           </div>
         </section>
         <section id="model-parameters" class="inspector-section" hidden>
