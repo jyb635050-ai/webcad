@@ -63,3 +63,4 @@
 - 新增用例 012：XZ 侧面 φ10 深10/贯穿切除体积分别为 63214.601837/60858.407346mm³，裸边均 0，PASS=6 FAIL=0。
 - 最终截图更新并新增 `09-circle-sketch-attached.png`、`10-cut-depth-preview.png`、`11-blind-hole-result.png`；原生 view_image 仍因 Windows 1327 失败，已实际调用并通过只读内存缩略图完成概念/实装视觉复核。
 - 本地冻结判卷器最终：PASS=84 FAIL=0 SKIP=0；tools/selftest.py 未修改。
+- GitHub Pages 已构建到修复提交 a44ea497aeae1699b91a19702e575301101dbb96；线上首页 HTTP 200、包含「贯穿全部」且旧切除占位文案为 0；线上冻结判卷器 PASS=84 FAIL=0 SKIP=0。
