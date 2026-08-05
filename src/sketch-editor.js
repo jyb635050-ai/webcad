@@ -29,6 +29,7 @@ export class SketchEditor {
     this.entities = [];
     this.activeTool = null;
     this.drawing = null;
+    this.pendingPointer = null;
     this.snapPoint = null;
     this.mmPerPixel = 0.25;
 
@@ -100,18 +101,30 @@ export class SketchEditor {
     return nearest ? { ...nearest } : point;
   }
 
-  pointerDown(event) {
-    if (!["line", "rectangle", "circle"].includes(this.activeTool)) return;
-    const point = this.snapped(this.localPoint(event));
+  startDrawing(point, pointerId) {
     this.drawing = {
-      id: `sketch-${Date.now()}-${Math.round(point.x)}`,
+      id: "sketch-" + Date.now() + "-" + Math.round(point.x),
       type: this.activeTool,
       start: point,
       end: point,
       center: point,
       radius: 0,
     };
-    this.svg.setPointerCapture(event.pointerId);
+    this.svg.setPointerCapture(pointerId);
+  }
+
+  pointerDown(event) {
+    if (!["line", "rectangle", "circle"].includes(this.activeTool)) return;
+    const point = this.snapped(this.localPoint(event));
+    const entityTarget = event.target.closest("[data-entity-id]");
+    if (entityTarget) {
+      this.pendingPointer = {
+        point,
+        pointerId: event.pointerId,
+      };
+      return;
+    }
+    this.startDrawing(point, event.pointerId);
     this.render();
   }
 
@@ -120,6 +133,13 @@ export class SketchEditor {
     document.querySelector("#coordinate-status").textContent =
       `X: ${(raw.x * this.mmPerPixel).toFixed(2)}　` +
       `Y: ${(raw.y * this.mmPerPixel).toFixed(2)}　Z: 0.00`;
+    if (this.pendingPointer && !this.drawing) {
+      const movement = pointDistance(raw, this.pendingPointer.point);
+      if (movement < 4) return;
+      const pending = this.pendingPointer;
+      this.pendingPointer = null;
+      this.startDrawing(pending.point, pending.pointerId);
+    }
     if (!this.drawing) return;
     const point = this.snapped(raw);
     this.drawing.end = point;
@@ -131,6 +151,11 @@ export class SketchEditor {
   }
 
   pointerUp(event) {
+    if (this.pendingPointer) {
+      this.pendingPointer = null;
+      this.snapPoint = null;
+      return;
+    }
     if (!this.drawing) return;
     const span =
       this.drawing.type === "circle"
@@ -153,11 +178,13 @@ export class SketchEditor {
 
   cancelDrawing() {
     this.drawing = null;
+    this.pendingPointer = null;
     this.snapPoint = null;
     this.render();
   }
 
   doubleClick(event) {
+    event.preventDefault();
     const target = event.target.closest("[data-entity-id]");
     if (!target) return;
     const entity = this.entities.find(
@@ -204,12 +231,23 @@ export class SketchEditor {
     } else if (entity.type === "circle") {
       entity.radius = pixels / 2;
     } else {
+      const oldEnd = { ...entity.end };
       const angle = Math.atan2(
         entity.end.y - entity.start.y,
         entity.end.x - entity.start.x,
       );
-      entity.end.x = entity.start.x + Math.cos(angle) * pixels;
-      entity.end.y = entity.start.y + Math.sin(angle) * pixels;
+      const nextEnd = {
+        x: entity.start.x + Math.cos(angle) * pixels,
+        y: entity.start.y + Math.sin(angle) * pixels,
+      };
+      for (const candidate of this.entities) {
+        if (candidate.type !== "line") continue;
+        for (const endpoint of ["start", "end"]) {
+          if (pointDistance(candidate[endpoint], oldEnd) <= 1.5) {
+            candidate[endpoint] = { ...nextEnd };
+          }
+        }
+      }
     }
     this.render();
     this.onChange?.(this.entities);

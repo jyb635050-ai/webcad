@@ -57,6 +57,7 @@ class WebCadApp {
       getDatumScreenPoint: (plane = "XY") =>
         this.viewer.getDatumScreenPoint(plane),
       getGizmoScreenPoint: () => this.viewer.getGizmoScreenPoint(),
+      getGizmoDiagnostics: () => this.viewer.getGizmoDiagnostics(),
       getSketchAttachment: () => this.getSketchAttachment(),
       getLineProfileAnalysis: () => clone(this.sketch.analyseLineProfiles()),
       getTopFaceScreenPoint: (u = 0.5, v = 0.5) => {
@@ -160,19 +161,30 @@ class WebCadApp {
     });
 
     const dimensionDialog = bySelector("#dimension-dialog");
-    dimensionDialog.addEventListener("close", () => {
-      if (
-        dimensionDialog.returnValue === "confirm" &&
-        this.dimensionTarget
-      ) {
-        const value = Number(bySelector("#dimension-value").value);
-        this.pushHistory();
-        this.sketch.updateDimension(
-          this.dimensionTarget.entity.id,
-          this.dimensionTarget.dimension,
-          value,
-        );
-      }
+    const commitDimension = () => {
+      if (!this.dimensionTarget) return;
+      const value = Number(bySelector("#dimension-value").value);
+      this.pushHistory();
+      this.sketch.updateDimension(
+        this.dimensionTarget.entity.id,
+        this.dimensionTarget.dimension,
+        value,
+      );
+      this.dimensionTarget = null;
+    };
+    dimensionDialog
+      .querySelector('button[value="confirm"]')
+      .addEventListener("click", (event) => {
+        event.preventDefault();
+        commitDimension();
+        dimensionDialog.close("confirm");
+      });
+    dimensionDialog
+      .querySelector('button[value="cancel"]')
+      .addEventListener("click", () => {
+        this.dimensionTarget = null;
+      });
+    dimensionDialog.addEventListener("cancel", () => {
       this.dimensionTarget = null;
     });
 

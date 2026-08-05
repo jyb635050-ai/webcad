@@ -211,18 +211,22 @@ export class CadViewer {
         opacity: selection.kind === "face" ? 0.065 : 0.105,
         side: THREE.DoubleSide,
         depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
       }),
     );
     surface.name = "active-sketch-plane";
+    surface.renderOrder = 3;
 
     const vertices = [];
     const halfWidth = width / 2;
     const halfHeight = height / 2;
     for (let u = -Math.floor(halfWidth / 10) * 10; u <= halfWidth; u += 10) {
-      vertices.push(u, -halfHeight, 0.015, u, halfHeight, 0.015);
+      vertices.push(u, -halfHeight, 0, u, halfHeight, 0);
     }
     for (let v = -Math.floor(halfHeight / 10) * 10; v <= halfHeight; v += 10) {
-      vertices.push(-halfWidth, v, 0.015, halfWidth, v, 0.015);
+      vertices.push(-halfWidth, v, 0, halfWidth, v, 0);
     }
     const gridGeometry = new THREE.BufferGeometry();
     gridGeometry.setAttribute(
@@ -236,17 +240,18 @@ export class CadViewer {
         transparent: true,
         opacity: 0.16,
         depthWrite: false,
+        depthTest: false,
       }),
     );
     grid.name = "active-sketch-grid";
+    grid.renderOrder = 4;
 
     const group = new THREE.Group();
     group.add(surface, grid);
     if (selection.plane === "XZ") group.rotation.x = Math.PI / 2;
     if (selection.plane === "YZ") group.rotation.y = Math.PI / 2;
     const center = this.selectionPlaneCenter(selection);
-    const normal = new THREE.Vector3(...selection.normal).normalize();
-    group.position.copy(center).addScaledVector(normal, 0.025);
+    group.position.copy(center);
     group.name = "active-sketch-surface";
     this.sketchPlaneGroup.add(group);
   }
@@ -258,7 +263,11 @@ export class CadViewer {
     this.canvas.parentElement.classList.add("sketching");
     for (const plane of this.referenceGroup.children) plane.visible = false;
     this.referenceGroup.visible = false;
-    this.selectionGroup.visible = selection.kind === "face";
+    this.selectionGroup.visible = false;
+    const worldGrid = this.scene.getObjectByName("reference-grid");
+    const worldAxes = this.scene.getObjectByName("axes");
+    if (worldGrid) worldGrid.visible = false;
+    if (worldAxes) worldAxes.visible = false;
     this.createSketchPlaneVisual(selection);
     this.alignToPlane(selection.plane);
   }
@@ -271,6 +280,10 @@ export class CadViewer {
     for (const plane of this.referenceGroup.children) plane.visible = true;
     this.referenceGroup.visible = restoreReferences;
     this.selectionGroup.visible = true;
+    const worldGrid = this.scene.getObjectByName("reference-grid");
+    const worldAxes = this.scene.getObjectByName("axes");
+    if (worldGrid) worldGrid.visible = !QA_FLAT_COLOR_MODE;
+    if (worldAxes) worldAxes.visible = !QA_FLAT_COLOR_MODE;
     this.camera.up.set(0, 0, 1);
   }
 
@@ -334,10 +347,21 @@ export class CadViewer {
     const viewDirection = new THREE.Vector3();
     this.camera.getWorldDirection(viewDirection);
     const normal = new THREE.Vector3(...selection.normal).normalize();
+    const planeCenter = this.selectionPlaneCenter(selection);
+    const activeLayer = this.sketchPlaneGroup.getObjectByName(
+      "active-sketch-surface",
+    );
+    const visualPlaneOffset = activeLayer
+      ? Math.abs(
+          normal.dot(activeLayer.position.clone().sub(planeCenter)),
+        )
+      : null;
     return {
       active: this.sketchMode,
       plane: selection.plane,
       coordinate: Number(selection.coordinate ?? 0),
+      visualPlaneOffset,
+      auxiliaryPlaneLayerCount: this.sketchPlaneGroup.children.length,
       planeVisible:
         this.sketchPlaneGroup.visible && this.sketchPlaneGroup.children.length > 0,
       cameraNormalDot: Math.abs(viewDirection.dot(normal)),
@@ -437,6 +461,8 @@ export class CadViewer {
 
   hitGizmo(event) {
     if (!this.gizmoPickMesh) return false;
+    this.previewGroup.updateMatrixWorld(true);
+    this.gizmoPickMesh.updateWorldMatrix(true, false);
     this.setRayFromEvent(event);
     return this.raycaster.intersectObject(this.gizmoPickMesh, false).length > 0;
   }
@@ -748,6 +774,10 @@ export class CadViewer {
     this.previewProfile = structuredClone(profile);
     this.previewOperation = "extrude";
     const placement = this.profilePlacement(profile, this.previewDistance);
+    if (!this.currentBounds) {
+      this.target.set(...placement.center);
+      this.updateCamera();
+    }
     const geometry = profile.type === "polygon"
       ? this.polygonExtrudeGeometry(profile, this.previewDistance)
       : new THREE.BoxGeometry(...placement.size);
@@ -927,6 +957,27 @@ export class CadViewer {
     return uniquePoints[plane]
       ? this.projectPoint(uniquePoints[plane])
       : null;
+  }
+
+  getGizmoDiagnostics() {
+    const point = this.getGizmoScreenPoint();
+    if (!point || !this.gizmoPickMesh) {
+      return { point, hitCount: 0, topElement: null };
+    }
+    this.previewGroup.updateMatrixWorld(true);
+    this.gizmoPickMesh.updateWorldMatrix(true, false);
+    this.setRayFromEvent({ clientX: point.x, clientY: point.y });
+    const hits = this.raycaster.intersectObject(this.gizmoPickMesh, false);
+    const topElement = document.elementFromPoint(point.x, point.y);
+    return {
+      point,
+      hitCount: hits.length,
+      firstDistance: hits[0]?.distance ?? null,
+      topElement: topElement?.id || topElement?.className?.baseVal ||
+        topElement?.className || topElement?.tagName || null,
+      pickVisible: this.gizmoPickMesh.visible,
+      previewDistance: Number(this.previewDistance),
+    };
   }
 
   getGizmoScreenPoint() {

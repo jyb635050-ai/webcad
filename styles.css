@@ -432,6 +432,12 @@ kbd {
   stroke: #fff;
   stroke-width: 4px;
   cursor: pointer;
+  pointer-events: all;
+  user-select: none;
+}
+
+.sketch-dimension:hover {
+  fill: var(--blue);
 }
 
 .snap-indicator {
