@@ -8,6 +8,19 @@ function svgElement(name, attributes = {}) {
   return element;
 }
 
+function pointDistance(first, second) {
+  return Math.hypot(first.x - second.x, first.y - second.y);
+}
+
+function polygonArea(points) {
+  return Math.abs(
+    points.reduce((sum, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return sum + point.x * next.y - next.x * point.y;
+    }, 0) / 2,
+  );
+}
+
 export class SketchEditor {
   constructor(svg, { onChange, onDimension }) {
     this.svg = svg;
@@ -210,6 +223,129 @@ export class SketchEditor {
 
   getCircles() {
     return this.entities.filter((entity) => entity.type === "circle");
+  }
+
+  analyseLineProfiles(tolerance = 1.5) {
+    const lines = this.entities.filter((entity) => entity.type === "line");
+    const nodes = [];
+    const edges = [];
+    const nodeFor = (point) => {
+      const existing = nodes.findIndex(
+        (node) => pointDistance(node.point, point) <= tolerance,
+      );
+      if (existing >= 0) {
+        nodes[existing].maximumGap = Math.max(
+          nodes[existing].maximumGap,
+          pointDistance(nodes[existing].point, point),
+        );
+        return existing;
+      }
+      nodes.push({ point: { ...point }, edges: [], maximumGap: 0 });
+      return nodes.length - 1;
+    };
+
+    let degenerateLineCount = 0;
+    for (const line of lines) {
+      const start = nodeFor(line.start);
+      const end = nodeFor(line.end);
+      if (start === end) {
+        degenerateLineCount += 1;
+        continue;
+      }
+      const edgeIndex = edges.length;
+      edges.push({ id: line.id, start, end });
+      nodes[start].edges.push(edgeIndex);
+      nodes[end].edges.push(edgeIndex);
+    }
+
+    const visitedEdges = new Set();
+    const profiles = [];
+    let openEndpointCount = 0;
+    let branchPointCount = 0;
+    for (let seed = 0; seed < edges.length; seed += 1) {
+      if (visitedEdges.has(seed)) continue;
+      const componentEdges = [];
+      const componentNodes = new Set();
+      const queue = [seed];
+      while (queue.length) {
+        const edgeIndex = queue.pop();
+        if (visitedEdges.has(edgeIndex)) continue;
+        visitedEdges.add(edgeIndex);
+        componentEdges.push(edgeIndex);
+        const edge = edges[edgeIndex];
+        componentNodes.add(edge.start);
+        componentNodes.add(edge.end);
+        for (const nodeIndex of [edge.start, edge.end]) {
+          for (const neighbour of nodes[nodeIndex].edges) {
+            if (!visitedEdges.has(neighbour)) queue.push(neighbour);
+          }
+        }
+      }
+
+      const degrees = [...componentNodes].map(
+        (nodeIndex) => nodes[nodeIndex].edges.length,
+      );
+      openEndpointCount += degrees.filter((degree) => degree === 1).length;
+      branchPointCount += degrees.filter((degree) => degree > 2).length;
+      const isCycle =
+        componentEdges.length >= 3 &&
+        componentEdges.length === componentNodes.size &&
+        degrees.every((degree) => degree === 2);
+      if (!isCycle) continue;
+
+      const firstEdgeIndex = componentEdges[0];
+      const firstEdge = edges[firstEdgeIndex];
+      const orderedNodes = [firstEdge.start];
+      const orderedEdges = [];
+      let currentNode = firstEdge.start;
+      let previousEdge = -1;
+      do {
+        const nextEdge = nodes[currentNode].edges.find(
+          (edgeIndex) => edgeIndex !== previousEdge,
+        );
+        if (nextEdge === undefined) break;
+        orderedEdges.push(nextEdge);
+        const edge = edges[nextEdge];
+        currentNode = edge.start === currentNode ? edge.end : edge.start;
+        previousEdge = nextEdge;
+        if (currentNode !== orderedNodes[0]) orderedNodes.push(currentNode);
+      } while (
+        currentNode !== orderedNodes[0] &&
+        orderedEdges.length <= componentEdges.length
+      );
+
+      const points = orderedNodes.map((nodeIndex) => ({
+        ...nodes[nodeIndex].point,
+      }));
+      if (
+        currentNode === orderedNodes[0] &&
+        orderedEdges.length === componentEdges.length &&
+        polygonArea(points) >= 1
+      ) {
+        profiles.push({
+          type: "polygon",
+          points,
+          lineIds: orderedEdges.map((edgeIndex) => edges[edgeIndex].id),
+          closureGap: Math.max(
+            0,
+            ...orderedNodes.map((nodeIndex) => nodes[nodeIndex].maximumGap),
+          ),
+          areaPixels: polygonArea(points),
+        });
+      }
+    }
+
+    return {
+      profiles,
+      lineCount: lines.length,
+      openEndpointCount,
+      branchPointCount,
+      degenerateLineCount,
+    };
+  }
+
+  getClosedLineProfiles() {
+    return this.analyseLineProfiles().profiles;
   }
 
   rectangleDimensions(entity = this.getRectangle()) {

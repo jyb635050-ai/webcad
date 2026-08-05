@@ -310,6 +310,8 @@ export class CadViewer {
         [u, v - profile.radius],
         [u, v + profile.radius],
       ];
+    } else if (profile.type === "polygon") {
+      points = profile.points;
     } else {
       const [u, v] = profile.origin;
       points = [
@@ -664,32 +666,77 @@ export class CadViewer {
     this.fitView(false);
   }
 
+  polygonExtrudeGeometry(profile, distance) {
+    const shape = new THREE.Shape();
+    profile.points.forEach((point, index) => {
+      if (index === 0) shape.moveTo(point[0], point[1]);
+      else shape.lineTo(point[0], point[1]);
+    });
+    shape.closePath();
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      depth: Number(distance),
+      steps: 1,
+      bevelEnabled: false,
+      curveSegments: 1,
+    });
+    const positions = geometry.getAttribute("position");
+    const offset = Number(profile.offset ?? 0);
+    const direction = Number(profile.direction ?? 1) < 0 ? -1 : 1;
+    for (let index = 0; index < positions.count; index += 1) {
+      const u = positions.getX(index);
+      const v = positions.getY(index);
+      const w = positions.getZ(index) * direction;
+      if (profile.plane === "XY") {
+        positions.setXYZ(index, u, v, offset + w);
+      } else if (profile.plane === "XZ") {
+        positions.setXYZ(index, u, offset + w, v);
+      } else {
+        positions.setXYZ(index, offset + w, u, v);
+      }
+    }
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
   profilePlacement(profile, distance) {
     const direction = profile.direction ?? 1;
     const offset = Number(profile.offset ?? 0);
     const signedDistance = distance * direction;
+    const polygonCenter = profile.type === "polygon"
+      ? profile.points.reduce(
+          (center, point) => [center[0] + point[0], center[1] + point[1]],
+          [0, 0],
+        ).map((value) => value / profile.points.length)
+      : null;
     const u = profile.type === "circle"
       ? profile.center[0]
-      : profile.origin[0] + profile.width / 2;
+      : profile.type === "polygon"
+        ? polygonCenter[0]
+        : profile.origin[0] + profile.width / 2;
     const v = profile.type === "circle"
       ? profile.center[1]
-      : profile.origin[1] + profile.height / 2;
+      : profile.type === "polygon"
+        ? polygonCenter[1]
+        : profile.origin[1] + profile.height / 2;
     if (profile.plane === "XY") {
       return {
-        size: profile.type === "circle" ? null : [profile.width, profile.height, distance],
+        size: ["circle", "polygon"].includes(profile.type) ? null : [profile.width, profile.height, distance],
         center: [u, v, offset + signedDistance / 2],
         arrowOrigin: [u, v, offset],
       };
     }
     if (profile.plane === "XZ") {
       return {
-        size: profile.type === "circle" ? null : [profile.width, distance, profile.height],
+        size: ["circle", "polygon"].includes(profile.type) ? null : [profile.width, distance, profile.height],
         center: [u, offset + signedDistance / 2, v],
         arrowOrigin: [u, offset, v],
       };
     }
     return {
-      size: profile.type === "circle" ? null : [distance, profile.width, profile.height],
+      size: ["circle", "polygon"].includes(profile.type) ? null : [distance, profile.width, profile.height],
       center: [offset + signedDistance / 2, u, v],
       arrowOrigin: [offset, u, v],
     };
@@ -701,7 +748,9 @@ export class CadViewer {
     this.previewProfile = structuredClone(profile);
     this.previewOperation = "extrude";
     const placement = this.profilePlacement(profile, this.previewDistance);
-    const geometry = new THREE.BoxGeometry(...placement.size);
+    const geometry = profile.type === "polygon"
+      ? this.polygonExtrudeGeometry(profile, this.previewDistance)
+      : new THREE.BoxGeometry(...placement.size);
     const preview = new THREE.Mesh(
       geometry,
       new THREE.MeshStandardMaterial({
@@ -713,7 +762,9 @@ export class CadViewer {
         depthWrite: false,
       }),
     );
-    preview.position.set(...placement.center);
+    if (profile.type !== "polygon") {
+      preview.position.set(...placement.center);
+    }
     preview.name = "extrude-preview";
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geometry),
@@ -770,6 +821,8 @@ export class CadViewer {
           this.previewDistance,
           48,
         );
+      } else if (profile.type === "polygon") {
+        geometry = this.polygonExtrudeGeometry(profile, this.previewDistance);
       } else {
         geometry = new THREE.BoxGeometry(...placement.size);
       }
@@ -788,7 +841,9 @@ export class CadViewer {
         if (profile.plane === "XY") preview.rotation.x = Math.PI / 2;
         if (profile.plane === "YZ") preview.rotation.z = -Math.PI / 2;
       }
-      preview.position.set(...placement.center);
+      if (profile.type !== "polygon") {
+        preview.position.set(...placement.center);
+      }
       preview.name = "cut-preview";
       preview.renderOrder = 8;
       const edges = new THREE.LineSegments(

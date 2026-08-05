@@ -58,6 +58,7 @@ class WebCadApp {
         this.viewer.getDatumScreenPoint(plane),
       getGizmoScreenPoint: () => this.viewer.getGizmoScreenPoint(),
       getSketchAttachment: () => this.getSketchAttachment(),
+      getLineProfileAnalysis: () => clone(this.sketch.analyseLineProfiles()),
       getTopFaceScreenPoint: (u = 0.5, v = 0.5) => {
         const bounds = this.state.result?.bounds;
         if (!bounds) return null;
@@ -285,8 +286,13 @@ class WebCadApp {
       this.sketch.rectangleDimensions(this.sketch.getRectangle()),
     );
     const hasCircles = this.sketch.getCircles().length > 0;
-    if (!hasRectangle && !hasCircles) {
-      this.showToast("草图未闭合", "先画一个矩形或圆形闭合轮廓。", true);
+    const lineAnalysis = this.sketch.analyseLineProfiles();
+    const hasLineProfile = lineAnalysis.profiles.length > 0;
+    if (!hasRectangle && !hasCircles && !hasLineProfile) {
+      const detail = lineAnalysis.lineCount
+        ? "线段尚有 " + lineAnalysis.openEndpointCount + " 个开放端点；请让末端吸附到起点。"
+        : "请画一个矩形、圆或由线段首尾相接的闭合轮廓。";
+      this.showToast("草图未闭合", detail, true);
       return;
     }
     this.sketch.setTool(null);
@@ -314,7 +320,14 @@ class WebCadApp {
     this.state.dirty = true;
     const rectangleCount = entities.filter((entity) => entity.type === "rectangle").length;
     const circleCount = entities.filter((entity) => entity.type === "circle").length;
-    this.setStatus(`草图：${rectangleCount} 个矩形，${circleCount} 个圆`);
+    const lineAnalysis = this.sketch.analyseLineProfiles();
+    this.setStatus(
+      "草图：" + rectangleCount + " 个矩形，" + circleCount + " 个圆，" +
+      lineAnalysis.profiles.length + " 个线段闭合轮廓" +
+      (lineAnalysis.openEndpointCount
+        ? "，" + lineAnalysis.openEndpointCount + " 个开放端点"
+        : ""),
+    );
   }
 
   openDimension(payload) {
@@ -363,6 +376,25 @@ class WebCadApp {
       );
       return next;
     }
+    if (next.type === "polygon") {
+      for (let axis = 0; axis < 2; axis += 1) {
+        const values = next.points.map((point) => point[axis]);
+        const minimum = Math.min(...values);
+        const maximum = Math.max(...values);
+        const span = maximum - minimum;
+        const available = ranges[axis][1] - ranges[axis][0];
+        if (span > available) continue;
+        const shift = minimum < ranges[axis][0]
+          ? ranges[axis][0] - minimum
+          : maximum > ranges[axis][1]
+            ? ranges[axis][1] - maximum
+            : 0;
+        next.points.forEach((point) => {
+          point[axis] = Number((point[axis] + shift).toFixed(3));
+        });
+      }
+      return next;
+    }
     next.origin[0] = Math.min(
       ranges[0][1] - next.width,
       Math.max(ranges[0][0], next.origin[0]),
@@ -374,7 +406,30 @@ class WebCadApp {
     return next;
   }
 
+  buildPolygonProfile(lineProfile) {
+    if (!lineProfile || !this.state.selection) return null;
+    const points = lineProfile.points.map((point) =>
+      this.viewer.screenPointToSketch(point),
+    );
+    if (points.some((point) => !point)) return null;
+    const selection = this.state.selection;
+    return this.clampProfileToFace({
+      type: "polygon",
+      plane: selection.plane,
+      points: points.map((point) =>
+        point.map((value) => Number(value.toFixed(3))),
+      ),
+      offset: Number(selection.coordinate ?? 0),
+      direction: Number(selection.direction ?? 1),
+      normal: clone(selection.normal),
+    });
+  }
+
   buildPendingProfile() {
+    const lineProfiles = this.sketch.getClosedLineProfiles();
+    if (lineProfiles.length) {
+      return this.buildPolygonProfile(lineProfiles.at(-1));
+    }
     const rectangle = this.sketch.getRectangle();
     if (!rectangle || !this.state.selection) return null;
     const start = this.viewer.screenPointToSketch(rectangle.start);
@@ -424,6 +479,16 @@ class WebCadApp {
         });
       }).filter(Boolean);
     }
+    const polygons = this.sketch.getClosedLineProfiles()
+      .map((lineProfile) => this.buildPolygonProfile(lineProfile))
+      .filter(Boolean);
+    if (polygons.length) {
+      return polygons.map((polygon) => ({
+        ...polygon,
+        direction: -Number(selection.direction ?? 1),
+        normal: inwardNormal,
+      }));
+    }
     const rectangle = this.buildPendingProfile();
     if (!rectangle) return [];
     return [{
@@ -435,16 +500,27 @@ class WebCadApp {
 
   getSketchAttachment() {
     const camera = this.viewer.getSketchCameraState();
+    const lineProfile = this.sketch.getClosedLineProfiles().at(-1);
     const rectangle = this.sketch.getRectangle();
-    const profile = rectangle ? this.buildPendingProfile() : null;
-    if (!profile || !rectangle) return { ...camera, maxScreenError: null };
+    const profile = lineProfile
+      ? this.buildPolygonProfile(lineProfile)
+      : rectangle
+        ? this.buildPendingProfile()
+        : null;
+    if (!profile) return { ...camera, maxScreenError: null };
     const bounds = bySelector("#sketch-overlay").getBoundingClientRect();
-    const overlayPoints = [
-      rectangle.start,
-      rectangle.end,
-      { x: rectangle.start.x, y: rectangle.end.y },
-      { x: rectangle.end.x, y: rectangle.start.y },
-    ].map((point) => ({ x: bounds.left + point.x, y: bounds.top + point.y }));
+    const sourcePoints = lineProfile
+      ? lineProfile.points
+      : [
+          rectangle.start,
+          rectangle.end,
+          { x: rectangle.start.x, y: rectangle.end.y },
+          { x: rectangle.end.x, y: rectangle.start.y },
+        ];
+    const overlayPoints = sourcePoints.map((point) => ({
+      x: bounds.left + point.x,
+      y: bounds.top + point.y,
+    }));
     const projected = this.viewer.getProfileScreenPoints(profile);
     const errors = projected.map((point) =>
       Math.min(
@@ -471,7 +547,7 @@ class WebCadApp {
     }
     const profile = this.buildPendingProfile();
     if (!profile) {
-      this.showToast("缺少闭合轮廓", "先画一个矩形并完成草图。", true);
+      this.showToast("缺少闭合轮廓", "先画一个矩形或线段闭合轮廓并完成草图。", true);
       return;
     }
     this.state.pendingProfile = profile;
@@ -512,13 +588,25 @@ class WebCadApp {
     this.setStatus("拉伸已取消，草图仍贴在原平面上");
   }
 
-  async confirmExtrude() {
-    if (this.state.mode !== "extrude-preview" || !this.state.pendingProfile) return;
-    const profile = clone(this.state.pendingProfile);
-    const tree = clone(this.state.tree);
-    const featureNumber = tree.features.filter((feature) => feature.type === "extrude").length + 1;
-    const sketchId = `sketch-${Object.keys(tree.sketches).length + 1}`;
-    tree.sketches[sketchId] = {
+  profileToTreeSketch(profile, sketchId) {
+    if (profile.type === "polygon") {
+      return {
+        id: sketchId,
+        type: "polygon",
+        plane: profile.plane,
+        points: clone(profile.points),
+      };
+    }
+    if (profile.type === "circle") {
+      return {
+        id: sketchId,
+        type: "circle",
+        plane: profile.plane,
+        center: clone(profile.center),
+        radius: profile.radius,
+      };
+    }
+    return {
       id: sketchId,
       type: "rectangle",
       plane: profile.plane,
@@ -526,6 +614,15 @@ class WebCadApp {
       width: profile.width,
       height: profile.height,
     };
+  }
+
+  async confirmExtrude() {
+    if (this.state.mode !== "extrude-preview" || !this.state.pendingProfile) return;
+    const profile = clone(this.state.pendingProfile);
+    const tree = clone(this.state.tree);
+    const featureNumber = tree.features.filter((feature) => feature.type === "extrude").length + 1;
+    const sketchId = `sketch-${Object.keys(tree.sketches).length + 1}`;
+    tree.sketches[sketchId] = this.profileToTreeSketch(profile, sketchId);
     tree.features.push({
       id: `extrude-${featureNumber}`,
       type: "extrude",
@@ -545,7 +642,7 @@ class WebCadApp {
       this.viewer.showExtrudePreview(profile, this.state.pendingExtrude);
       return;
     }
-    if (featureNumber === 1) {
+    if (featureNumber === 1 && profile.type === "rectangle") {
       this.state.params.width = profile.width;
       this.state.params.depth = profile.height;
     }
@@ -589,7 +686,7 @@ class WebCadApp {
     }
     const profiles = this.buildPendingCutProfiles();
     if (!profiles.length) {
-      this.showToast("缺少闭合轮廓", "请绘制一个矩形或至少一个圆。", true);
+      this.showToast("缺少闭合轮廓", "请绘制一个矩形、圆或线段闭合轮廓。", true);
       return;
     }
     this.state.pendingCutProfiles = profiles;
@@ -644,22 +741,7 @@ class WebCadApp {
     for (const profile of this.state.pendingCutProfiles) {
       cutNumber += 1;
       const sketchId = `sketch-${Object.keys(tree.sketches).length + 1}`;
-      tree.sketches[sketchId] = profile.type === "circle"
-        ? {
-            id: sketchId,
-            type: "circle",
-            plane: profile.plane,
-            center: clone(profile.center),
-            radius: profile.radius,
-          }
-        : {
-            id: sketchId,
-            type: "rectangle",
-            plane: profile.plane,
-            origin: clone(profile.origin),
-            width: profile.width,
-            height: profile.height,
-          };
+      tree.sketches[sketchId] = this.profileToTreeSketch(profile, sketchId);
       tree.features.push({
         id: `cut-${cutNumber}`,
         type: "cut",
@@ -1010,14 +1092,19 @@ class WebCadApp {
     });
     allBySelector('[data-feature="extrude"]').forEach((button) => {
       button.disabled =
-        stage !== "sketch-ready" || !this.sketch.getRectangle();
+        stage !== "sketch-ready" ||
+        !(this.sketch.getRectangle() || this.sketch.getClosedLineProfiles().length);
     });
     allBySelector('[data-feature="cut"]').forEach((button) => {
       button.disabled = !(
         stage === "sketch-ready" &&
         this.state.result &&
         this.state.selection?.kind === "face" &&
-        (this.sketch.getRectangle() || this.sketch.getCircles().length)
+        (
+          this.sketch.getRectangle() ||
+          this.sketch.getCircles().length ||
+          this.sketch.getClosedLineProfiles().length
+        )
       );
     });
     allBySelector("[data-tool]").forEach((button) => {

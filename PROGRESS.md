@@ -64,3 +64,12 @@
 - 最终截图更新并新增 `09-circle-sketch-attached.png`、`10-cut-depth-preview.png`、`11-blind-hole-result.png`；原生 view_image 仍因 Windows 1327 失败，已实际调用并通过只读内存缩略图完成概念/实装视觉复核。
 - 本地冻结判卷器最终：PASS=84 FAIL=0 SKIP=0；tools/selftest.py 未修改。
 - GitHub Pages 已构建到修复提交 a44ea497aeae1699b91a19702e575301101dbb96；线上首页 HTTP 200、包含「贯穿全部」且旧切除占位文案为 0；线上冻结判卷器 PASS=84 FAIL=0 SKIP=0。
+
+## 2026-08-05
+- 用户截图中的三条线视觉与拓扑均已闭合；根因是旧实现只检查 rectangle/circle 实体，普通 line 从未参与闭环识别，故底部错误显示“0 个矩形，0 个圆”并误报未闭合。
+- 新增线段图拓扑分析：至少 3 边、连通分量边数=顶点数、每个顶点度数=2、面积非零；状态栏同时报告闭合轮廓数与开放端点数。
+- 线段闭环已接通 polygon 草图、XY/XZ/YZ 三维预览、Web Worker 内 OCCT 拉伸/切除、特征树保存和导出 Worker；草图仍严格贴合所选基准面/实体面。
+- 反向验证：仅画两条线时闭合轮廓=0、开放端点=2、完成草图保持 sketch 并提示“2 个开放端点”；补第三条线后闭合轮廓=1、顶点=3、闭合间隙=0px。
+- 新增 test/cases/013-line-loop-polygon.case.py：60×40 三角形拉伸20体积=24000.0mm³、三角形数=8、裸边=0；顶面三角形深10切除后体积=22500.000005mm³、特征序列 extrude/cut、裸边=0，PASS=15 FAIL=0 SKIP=0。
+- 首次全量运行中旧 009 箭头拖动等待发生一次偶发超时（PASS=77 FAIL=1）；未改用例，单独原样重跑 PASS=11 FAIL=0，随后全量原样重跑 PASS=99 FAIL=0 SKIP=0。
+- tools/selftest.py 未修改；本轮回滚次数 0，BLOCKED 仍为“无”。
