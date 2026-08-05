@@ -82,4 +82,5 @@
 - 新增用例 014：双击80×40改为100×60、投影误差0px、视觉法向偏移0mm、100×60×20体积120000；实体顶面三角线轮廓首边20改30后仍闭合，深10切除体积117750.0000075mm³、裸边0，PASS=17 FAIL=0。
 - 旧009箭头验收连续3次卡在 pendingExtrude 等待，按止损规则切换到拾取诊断；新增015测得射线交点1、顶层DOM=cad-canvas、48px拖动20→32mm。
 - 箭头偶发根因：首次拉伸仍围绕基准面中心观察，偏置轮廓的箭头可能落到视口外；现首次预览自动聚焦轮廓中心，且射线拾取前更新世界矩阵。旧009恢复PASS=11，015为PASS=6。
-- 本地冻结判卷器最终：PASS=122 FAIL=0 SKIP=0；本轮未修改 tools/selftest.py，BLOCKED仍为“无”。
+- 本地冻结判卷器最终：PASS=122 FAIL=0 SKIP=0；本轮未修改 tools/selftest.py，BLOCKED仍为“无”。- 发布提交 c65152c 已推送；Pages 第6次轮询由旧 app.js 47017B 切换为新 47460B，并命中 getGizmoDiagnostics 标记。
+- 冻结判卷器指向 https://jyb635050-ai.github.io/webcad/ 最终复验：PASS=122 FAIL=0 SKIP=0。
