@@ -69,6 +69,15 @@ class WebCadApp {
           bounds.max[2],
         ]);
       },
+      getFrontFaceScreenPoint: (u = 0.5, v = 0.5) => {
+        const bounds = this.state.result?.bounds;
+        if (!bounds) return null;
+        return this.viewer.projectPoint([
+          bounds.min[0] + (bounds.max[0] - bounds.min[0]) * u,
+          bounds.min[1],
+          bounds.min[2] + (bounds.max[2] - bounds.min[2]) * v,
+        ]);
+      },
       selectDatumPlane: (plane = "XY") => this.viewer.selectDatumPlane(plane),
       getState: () => ({
         mode: this.state.mode,

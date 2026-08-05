@@ -59,11 +59,14 @@ function makeExtrusion(sketch, distance, offset = 0, feature = {}) {
     if (plane === "YZ") return replicad.makeCylinder(sketch.radius, distance, [start, u, v], [1, 0, 0]);
   }
   if (sketch.type === "polygon") {
-    const builder = new replicad.Sketcher(plane, Number(offset)).movePointerTo(
+    const sketchOrigin =
+      plane === "XZ" ? [0, Number(offset), 0] : Number(offset);
+    const sketchDirection = plane === "XZ" ? -direction : direction;
+    const builder = new replicad.Sketcher(plane, sketchOrigin).movePointerTo(
       sketch.points[0],
     );
     sketch.points.slice(1).forEach((point) => builder.lineTo(point));
-    return builder.close().extrude(distance * direction);
+    return builder.close().extrude(distance * sketchDirection);
   }
   throw new Error(`不支持的草图类型或平面：${sketch.type}/${plane}`);
 }
@@ -161,8 +164,15 @@ async function buildFeatureTree(tree) {
         cutFeature = { ...feature, plane: "XY", direction: 1 };
       }
       const tool = makeExtrusion(sketch, distance, offset, cutFeature);
+      const volumeBeforeCut = replicad.measureVolume(shape);
       const next = shape.cut(tool);
       dispose(tool);
+      const volumeAfterCut = replicad.measureVolume(next);
+      const minimumReduction = Math.max(1e-7, volumeBeforeCut * 1e-10);
+      if (volumeBeforeCut - volumeAfterCut <= minimumReduction) {
+        dispose(next);
+        throw new Error("切除轮廓没有与实体相交，请确认草图位于实体面且方向朝向实体内部");
+      }
       shape = replaceShape(shape, next);
       const box = shape.boundingBox;
       const [minimum, maximum] = box.bounds;

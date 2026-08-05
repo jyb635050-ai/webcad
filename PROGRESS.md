@@ -84,3 +84,11 @@
 - 箭头偶发根因：首次拉伸仍围绕基准面中心观察，偏置轮廓的箭头可能落到视口外；现首次预览自动聚焦轮廓中心，且射线拾取前更新世界矩阵。旧009恢复PASS=11，015为PASS=6。
 - 本地冻结判卷器最终：PASS=122 FAIL=0 SKIP=0；本轮未修改 tools/selftest.py，BLOCKED仍为“无”。- 发布提交 c65152c 已推送；Pages 第6次轮询由旧 app.js 47017B 切换为新 47460B，并命中 getGizmoDiagnostics 标记。
 - 冻结判卷器指向 https://jyb635050-ai.github.io/webcad/ 最终复验：PASS=122 FAIL=0 SKIP=0。
+## 2026-08-05 侧面线轮廓切除方向修复
+- 用户截图命中 XZ 前侧面的 polygon 切除分支。第一性原理核对 vendor/replicad.mjs：Replicad 的 XZ 命名平面法向为 -Y，数字 offset 也沿 -Y 解释；应用保存的是世界 Y 坐标与世界方向，导致 Three.js 红色预览向内而 OCCT 刀具体向外。
+- 修复前红灯：新增 016 用例中，三角形盲切应为 23500mm³、实际 24000mm³；贯穿应为 22000mm³、实际 23900mm³；PASS=126 FAIL=2 SKIP=0。
+- geometry-worker 与 export-worker 已统一把 XZ polygon 的世界 offset 映射为 [0, y, 0]，并反转为 Replicad 的局部拉伸符号；切除前后增加实际体积比较，无相交时不再静默写入假切除特征，而是明确提示方向/贴面错误。
+- 修复后 016：盲切 23500mm³、贯穿 21999.999999999996mm³，裸边均为 0，三角形 28；该红→绿验证未改断言与容差。
+- 新增 017 真实 UI 用例：鼠标点击实体前侧面得到 XZ/[0,-1,0]，三条线识别 1 个闭环，切除按钮可用，勾选贯穿全部后体积 192000→184000mm³，特征序列 extrude/cut，裸边 0。
+- 同一 UI 模型导出 3MF 后由 Python zipfile+XML 独立解析并按三角网格计算体积：183999.99999999994mm³、42 顶点、28 三角形，证明导出文件保留真实切口。
+- 本地冻结判卷器最终：PASS=139 FAIL=0 SKIP=0；test/cases 文件数 17。tools/selftest.py SHA256 仍为 377860705892940F8F9871A2904AC279DF6F5EA008E5B64C309A49DFCCF91A33，历史仍只有 351440f；BLOCKED 仍为“无”，本轮回滚次数 0。
