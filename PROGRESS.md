@@ -72,4 +72,5 @@
 - 反向验证：仅画两条线时闭合轮廓=0、开放端点=2、完成草图保持 sketch 并提示“2 个开放端点”；补第三条线后闭合轮廓=1、顶点=3、闭合间隙=0px。
 - 新增 test/cases/013-line-loop-polygon.case.py：60×40 三角形拉伸20体积=24000.0mm³、三角形数=8、裸边=0；顶面三角形深10切除后体积=22500.000005mm³、特征序列 extrude/cut、裸边=0，PASS=15 FAIL=0 SKIP=0。
 - 首次全量运行中旧 009 箭头拖动等待发生一次偶发超时（PASS=77 FAIL=1）；未改用例，单独原样重跑 PASS=11 FAIL=0，随后全量原样重跑 PASS=99 FAIL=0 SKIP=0。
-- tools/selftest.py 未修改；本轮回滚次数 0，BLOCKED 仍为“无”。
+- tools/selftest.py 未修改；本轮回滚次数 0，BLOCKED 仍为“无”。- 发布提交 1d4a030 已推送到 main；线上 src/app.js 返回 HTTP 200、47017B，并包含本提交独有 getLineProfileAnalysis 标记。
+- 冻结判卷器指向 https://jyb635050-ai.github.io/webcad/ 全量复验：PASS=99 FAIL=0 SKIP=0。
